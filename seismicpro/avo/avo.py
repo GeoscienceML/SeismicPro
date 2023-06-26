@@ -8,7 +8,7 @@ from ..utils import to_list, save_figure
 
 
 class AmplitudeOffsetDistribution:
-    def __init__(self, headers, avo_column, bin_size, indexed_by, name=None):
+    def __init__(self, headers, avo_column, bin_size, indexed_by, name=None, pol_degree=3):
         if "offset" not in headers:
             raise ValueError("Missing offset header")
         self.avo_column = avo_column
@@ -20,7 +20,7 @@ class AmplitudeOffsetDistribution:
         else:
             bin_bounds = np.cumsum([0, *bin_size])
 
-        # Subtract 1 to start at offset 0 instead of `bin_size`.
+        # Subtract 1 to start at offset 0 instead of `bin_size`
         bin_bounds_ixs = np.searchsorted(bin_bounds, headers["offset"], side='right') - 1
         headers["bin"] = bin_bounds[np.clip(bin_bounds_ixs, 0, len(bin_bounds))]
         self.stats_df = headers.groupby([*to_list(indexed_by), "bin"], as_index=False)[avo_column].mean()
@@ -28,20 +28,19 @@ class AmplitudeOffsetDistribution:
 
         # Metrics
         self.metrics = {}
-        self.qc()
+        self.qc(pol_degree=pol_degree)
 
     @classmethod
-    def from_survey(cls, survey, avo_column, bin_size, indexed_by=None, name=None):
+    def from_survey(cls, survey, avo_column, bin_size, indexed_by=None, name=None, pol_degree=3):
         indexed_by = indexed_by if indexed_by is not None else survey.indexed_by
         name = name if name is not None else survey.name
-        return cls(headers=survey.headers, avo_column=avo_column, bin_size=bin_size, indexed_by=indexed_by, name=name)
+        return cls(headers=survey.headers, avo_column=avo_column, bin_size=bin_size, indexed_by=indexed_by, name=name,
+                   pol_degree=pol_degree)
 
     def qc(self, pol_degree=3):
-        self.metrics["std"] = self._calculate_std()
+        if "std" not in self.metrics:
+            self.metrics["std"] = self.stats_df.groupby("bin")[self.avo_column].apply(np.nanstd).mean()
         self.metrics["corr"] = self._calculate_correlation_with_polynomial(pol_degree=pol_degree)
-
-    def _calculate_std(self):
-        return self.stats_df.groupby("bin")[self.avo_column].apply(np.nanstd).mean()
 
     def _calculate_correlation_with_polynomial(self, pol_degree):
         mask = ~self.bins_df[self.avo_column].isna()

@@ -1344,6 +1344,8 @@ class Gather(TraceContainer, SamplesContainer):
         method = func_dict.get(mode)
         if method is None:
             raise ValueError(f"`mode` should be either `abs` or `rms`, not {mode}")
+
+        # Do not take into account zero amplitudes while calculating avo
         data = np.where(self.data != 0, self.data, np.nan)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=SettingWithCopyWarning)
