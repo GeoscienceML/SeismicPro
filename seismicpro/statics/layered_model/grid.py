@@ -4,7 +4,6 @@ import numpy as np
 import polars as pl
 
 from .dataset import TravelTimeDataset
-from ...survey import Survey
 from ...metrics import MetricMap
 from ...const import HDR_FIRST_BREAK
 from ...utils import to_list, IDWInterpolator
@@ -20,14 +19,14 @@ class SpatialGrid:
         self.n_interpolation_neighbors = n_interpolation_neighbors
         self.interpolator_class = partial(IDWInterpolator, neighbors=n_interpolation_neighbors)
         self.surface_elevation_interpolator = self.interpolator_class(coords, surface_elevations)
-        self.survey_list = None if survey is None else to_list(survey)
-        self.is_single_survey = isinstance(survey, Survey)
+        self.survey = survey
 
     def __len__(self):
         return len(self.coords)
 
     def __getitem__(self, key):
-        return type(self)(self.coords[key], self.surface_elevations[key])
+        return type(self)(self.coords[key], self.surface_elevations[key], survey=self.survey,
+                          n_interpolation_neighbors=self.n_interpolation_neighbors)
 
     @property
     def n_coords(self):
@@ -148,7 +147,7 @@ class SpatialGrid:
         return cls(coords, elevations, survey=survey, n_interpolation_neighbors=n_interpolation_neighbors)
 
     @classmethod
-    def from_file(cls, path, encoding="UTF-8"):
+    def from_file(cls, path, survey=None, encoding="UTF-8"):
         pass
 
     def dump(self, path, encoding="UTF-8"):
@@ -162,7 +161,7 @@ class SpatialGrid:
             raise ValueError("A survey must be defined for the grid")
 
         wv_headers = [pl.from_pandas(sur.get_headers(["SourceX", "SourceY", weathering_velocity_header])).lazy()
-                      for sur in self.survey_list]
+                      for sur in to_list(self.survey)]
         wv_headers = pl.concat(wv_headers).groupby("SourceX", "SourceY").agg(pl.mean(weathering_velocity_header))
         wv_headers = wv_headers.collect()
 
@@ -186,10 +185,12 @@ class SpatialGrid:
     # Dataset generation
 
     def create_dataset(self, survey=None, first_breaks_header=HDR_FIRST_BREAK, uphole_correction_method="auto",
-                       velocity_cell_size=250):
+                       slowness_grid_size=500):
         if survey is None:
-            survey = self.survey_list
-        return TravelTimeDataset(survey, self, first_breaks_header, uphole_correction_method, velocity_cell_size)
+            if not self.has_survey:
+                raise ValueError("A survey to create a dataset must be passed")
+            survey = self.survey
+        return TravelTimeDataset(survey, self, first_breaks_header, uphole_correction_method, slowness_grid_size)
 
     # Grid visualization
 

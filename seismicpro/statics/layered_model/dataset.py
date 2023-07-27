@@ -2,102 +2,125 @@ import math
 
 import torch
 import numpy as np
+import polars as pl
 from numba import njit, prange
 from tqdm.auto import tqdm
 
 from .dataloader import TensorDataLoader
 from ..utils import get_uphole_correction_method
-from ...utils import to_list, align_args
+from ...utils import align_args
 from ...const import HDR_FIRST_BREAK
 
 
 class TravelTimeDataset:
     def __init__(self, survey, grid, first_breaks_header=HDR_FIRST_BREAK, uphole_correction_method="auto",
-                 velocity_cell_size=250):
+                 slowness_grid_size=500):
         self.grid = grid
-        self.survey_list = to_list(survey)
 
-        source_coords = np.concatenate([survey[["SourceX", "SourceY"]] for survey in self.survey_list])
-        source_indices, source_weights = self.grid.get_interpolation_params(source_coords)
-        self.source_coords = torch.tensor(source_coords, dtype=torch.float32)
-        self.source_indices = torch.tensor(source_indices, dtype=torch.int32)
-        self.source_weights = torch.tensor(source_weights, dtype=torch.float32)
+        aligned_args = align_args(survey, first_breaks_header, uphole_correction_method)
+        self.survey_list = aligned_args[0]
+        self.first_breaks_header_list = aligned_args[1]
+        self.uphole_correction_method_list = [get_uphole_correction_method(survey, method)
+                                              for survey, method in zip(aligned_args[0], aligned_args[2])]
 
-        receiver_coords = np.concatenate([survey[["GroupX", "GroupY"]] for survey in self.survey_list])
-        receiver_indices, receiver_weights = self.grid.get_interpolation_params(receiver_coords)
-        receiver_elevations = np.concatenate([survey["ReceiverGroupElevation"] for survey in self.survey_list])
-        self.receiver_coords = torch.tensor(receiver_coords, dtype=torch.float32)
-        self.receiver_elevations = torch.tensor(receiver_elevations, dtype=torch.float32)
-        self.receiver_indices = torch.tensor(receiver_indices, dtype=torch.int32)
-        self.receiver_weights = torch.tensor(receiver_weights, dtype=torch.float32)
-
-        # Process uphole correction method: set proper source elevation and target traveltime
-        self.first_breaks_header = first_breaks_header
-        self.uphole_correction_method_list = None
-        self.source_elevations = None
-        self.true_traveltimes = None
+        # Extract information about source and receiver location and the corresponding traveltime from given surveys
+        survey_list_data = self._get_survey_list_data(self.survey_list, self.first_breaks_header_list,
+                                                      self.uphole_correction_method_list)
+        source_coords, source_elevations, receiver_coords, receiver_elevations = survey_list_data[:4]
+        true_traveltimes, target_traveltimes, traveltime_corrections = survey_list_data[4:]
+        self.source_coords = torch.from_numpy(source_coords)
+        self.source_elevations = torch.from_numpy(source_elevations)
+        self.receiver_coords = torch.from_numpy(receiver_coords)
+        self.receiver_elevations = torch.from_numpy(receiver_elevations)
+        self.true_traveltimes = torch.from_numpy(true_traveltimes)
         self.pred_traveltimes = None
-        self.target_traveltimes = None
-        self.traveltime_corrections = None
-        self.set_uphole_correction_method(uphole_correction_method)
+        self.target_traveltimes = torch.from_numpy(target_traveltimes)
+        self.traveltime_corrections = torch.from_numpy(traveltime_corrections)
 
-        # Construct an interpolation grid for mean slowness estimation
-        coords, indices, weights = self.get_velocity_grid(source_coords, receiver_coords, velocity_cell_size)
-        coords_grid_indices, coords_grid_weights = self.grid.get_interpolation_params(coords)
-        grid_indices, grid_weights = self.get_grid_weights(coords_grid_indices, coords_grid_weights, indices, weights)
-        self.grid_indices = torch.tensor(grid_indices, dtype=torch.int32)
-        self.grid_weights = torch.tensor(grid_weights, dtype=torch.float32)
+        # Get indices of grid coords and their weights for each source and receiver for further interpolation of
+        # layered model parameters
+        source_indices, source_weights = self._get_sensor_interpolation_params(source_coords, grid)
+        self.source_indices = torch.from_numpy(source_indices)
+        self.source_weights = torch.from_numpy(source_weights)
+        receiver_indices, receiver_weights = self._get_sensor_interpolation_params(receiver_coords, grid)
+        self.receiver_indices = torch.from_numpy(receiver_indices)
+        self.receiver_weights = torch.from_numpy(receiver_weights)
+
+        # Get indices of grid coords, appeared either in source_indices or receiver_indices
+        used_source_mask = np.bincount(source_indices.ravel(), minlength=self.grid.n_coords) > 0
+        used_receiver_mask = np.bincount(receiver_indices.ravel(), minlength=self.grid.n_coords) > 0
+        used_grid_mask = used_source_mask | used_receiver_mask
+        used_grid_indices = np.require(np.nonzero(used_grid_mask)[0], dtype=np.int32)
+        self.used_grid_mask = torch.from_numpy(used_grid_mask)
+
+        # Construct an interpolation grid for mean slowness estimation and get interpolation indices and weights for
+        # each trace
+        indices, weights = self._get_slowness_averaging_params(source_coords, receiver_coords,
+                                                               grid[used_grid_indices], slowness_grid_size)
+        self.mean_slowness_indices = torch.from_numpy(used_grid_indices[indices])
+        self.mean_slowness_weights = torch.from_numpy(weights)
 
     @property
     def has_predictions(self):
         return self.pred_traveltimes is not None
 
-    def _process_survey_uphole_correction_method(self, survey, uphole_correction_method):
-        source_elevations = survey["SourceSurfaceElevation"]
-        true_traveltimes = survey[self.first_breaks_header]
+    @staticmethod
+    def _get_survey_data(survey, first_breaks_header, uphole_correction_method):
+        source_coords = np.require(survey[["SourceX", "SourceY"]], dtype=np.float32)
+        source_elevations = np.require(survey["SourceSurfaceElevation"], dtype=np.float32)
+
+        receiver_coords = np.require(survey[["GroupX", "GroupY"]], dtype=np.float32)
+        receiver_elevations = np.require(survey["ReceiverGroupElevation"], dtype=np.float32)
+
+        true_traveltimes = np.require(survey[first_breaks_header], dtype=np.float32)
         target_traveltimes = true_traveltimes
-        uphole_correction_method = get_uphole_correction_method(survey, uphole_correction_method)
+
         if uphole_correction_method == "time":
-            traveltime_corrections = survey["SourceUpholeTime"]
+            traveltime_corrections = np.require(survey["SourceUpholeTime"], dtype=np.float32)
             target_traveltimes = target_traveltimes + traveltime_corrections
         elif uphole_correction_method == "depth":
-            source_elevations = source_elevations - survey["SourceDepth"]
             traveltime_corrections = np.zeros_like(target_traveltimes)
+            source_elevations = source_elevations - np.require(survey["SourceDepth"], dtype=np.float32)
         else:
             traveltime_corrections = np.zeros_like(target_traveltimes)
-        return (source_elevations, true_traveltimes, target_traveltimes,
-                traveltime_corrections, uphole_correction_method)
 
-    def set_uphole_correction_method(self, uphole_correction_method):
-        _, uphole_correction_method_list = align_args(self.survey_list, uphole_correction_method)
-        res = [self._process_survey_uphole_correction_method(survey, uphole_correction_method)
-               for survey, uphole_correction_method in zip(self.survey_list, uphole_correction_method_list)]
-        res = list(zip(*res))
+        survey_data = (source_coords, source_elevations, receiver_coords, receiver_elevations,
+                       true_traveltimes, target_traveltimes, traveltime_corrections)
+        return survey_data
 
-        self.source_elevations = torch.tensor(np.concatenate(res[0]), dtype=torch.float32)
-        self.true_traveltimes = torch.tensor(np.concatenate(res[1]), dtype=torch.float32)
-        self.target_traveltimes = torch.tensor(np.concatenate(res[2]), dtype=torch.float32)
-        self.traveltime_corrections = torch.tensor(np.concatenate(res[3]), dtype=torch.float32)
-        self.uphole_correction_method_list = list(res[4])
+    @classmethod
+    def _get_survey_list_data(cls, survey_list, first_breaks_header_list, uphole_correction_method_list):
+        survey_iterator = zip(survey_list, first_breaks_header_list, uphole_correction_method_list)
+        survey_list_data = list(zip(*[cls._get_survey_data(*params) for params in survey_iterator]))
+        survey_list_data = [seq[0] if len(survey_list) == 1 else np.concatenate(seq) for seq in survey_list_data]
+        return survey_list_data
+
+    @staticmethod
+    def _get_sensor_interpolation_params(sensor_coords, grid):
+        coords_df = pl.from_numpy(sensor_coords, schema=["X", "Y"])
+        unique_coords_df = coords_df.unique()
+        inverse_df = coords_df.join(unique_coords_df.with_row_count(name="i"), how="left", on=["X", "Y"])
+
+        unique_coords = unique_coords_df.to_numpy()
+        inverse = inverse_df.get_column("i").to_numpy()
+
+        indices, weights = grid.get_interpolation_params(unique_coords)
+        indices = np.require(indices, dtype=np.int32)[inverse]
+        weights = np.require(weights, dtype=np.float32)[inverse]
+        return indices, weights
 
     @staticmethod
     @njit(nogil=True, parallel=True)
-    def get_velocity_grid(source_coords, receiver_coords, velocity_cell_size):
-        min_sx = source_coords[:, 0].min()
-        min_sy = source_coords[:, 1].min()
-        max_sx = source_coords[:, 0].max()
-        max_sy = source_coords[:, 1].max()
-        min_rx = receiver_coords[:, 0].min()
-        min_ry = receiver_coords[:, 1].min()
-        max_rx = receiver_coords[:, 0].max()
-        max_ry = receiver_coords[:, 1].max()
+    def _get_intermediate_averaging_params(source_coords, receiver_coords, grid_size):
+        min_x = min(source_coords[:, 0].min(), receiver_coords[:, 0].min())
+        max_x = max(source_coords[:, 0].max(), receiver_coords[:, 0].max())
+        min_y = min(source_coords[:, 1].min(), receiver_coords[:, 1].min())
+        max_y = max(source_coords[:, 1].max(), receiver_coords[:, 1].max())
 
-        grid_origin_x = min(min_sx, min_rx)
-        grid_origin_y = min(min_sy, min_ry)
-        grid_size_x = 1 + math.ceil((max(max_sx, max_rx) - grid_origin_x) / velocity_cell_size)
-        grid_size_y = 1 + math.ceil((max(max_sy, max_ry) - grid_origin_y) / velocity_cell_size)
-        grid_coords_x = grid_origin_x + velocity_cell_size * np.arange(grid_size_x)
-        grid_coords_y = grid_origin_y + velocity_cell_size * np.arange(grid_size_y)
+        grid_size_x = 1 + math.ceil((max_x - min_x) / grid_size)
+        grid_size_y = 1 + math.ceil((max_y - min_y) / grid_size)
+        grid_coords_x = min_x + grid_size * np.arange(grid_size_x)
+        grid_coords_y = min_y + grid_size * np.arange(grid_size_y)
 
         coords = np.empty((grid_size_x * grid_size_y, 2))
         for i in prange(grid_size_x):
@@ -110,7 +133,7 @@ class TravelTimeDataset:
         trace_n_cells = np.empty(n_traces, dtype=np.int32)
         for i in prange(n_traces):
             offset = np.sqrt(np.sum((receiver_coords[i] - source_coords[i])**2))
-            trace_n_cells[i] = 1 + math.ceil(offset / velocity_cell_size)
+            trace_n_cells[i] = 1 + math.ceil(offset / grid_size)
         max_n_cells = trace_n_cells.max()
 
         keep_coords_mask = np.zeros(n_traces, dtype=np.bool_)
@@ -121,11 +144,11 @@ class TravelTimeDataset:
             n_cells = trace_n_cells[i]
 
             coords_x = np.linspace(source_coords[i, 0], receiver_coords[i, 0], n_cells)
-            indices_x = np.round((coords_x - grid_origin_x) / velocity_cell_size).astype(np.int32)
+            indices_x = np.round((coords_x - min_x) / grid_size).astype(np.int32)
             indices_x = np.clip(indices_x, 0, grid_size_x - 1)
 
             coords_y = np.linspace(source_coords[i, 1], receiver_coords[i, 1], n_cells)
-            indices_y = np.round((coords_y - grid_origin_y) / velocity_cell_size).astype(np.int32)
+            indices_y = np.round((coords_y - min_y) / grid_size).astype(np.int32)
             indices_y = np.clip(indices_y, 0, grid_size_y - 1)
 
             intermediate_indices = indices_x * grid_size_y + indices_y
@@ -142,23 +165,42 @@ class TravelTimeDataset:
 
     @staticmethod
     @njit(nogil=True, parallel=True)
-    def get_grid_weights(coords_grid_indices, coords_grid_weights, indices, weights):
-        n_traces = len(indices)
-        grid_indices = np.empty((n_traces, indices.shape[1] * coords_grid_indices.shape[1]), dtype=np.int32)
-        grid_weights = np.empty((n_traces, indices.shape[1] * coords_grid_indices.shape[1]), dtype=np.float32)
+    def _combine_averaging_params(igrid_averaging_indices, igrid_to_grid_indices,
+                                  igrid_averaging_weights, igrid_to_grid_weights):
+        n_traces = len(igrid_averaging_indices)
+        n_indices_per_trace = igrid_averaging_indices.shape[1] * igrid_to_grid_indices.shape[1]
+        indices = np.empty((n_traces, n_indices_per_trace), dtype=np.int32)
+        weights = np.empty((n_traces, n_indices_per_trace), dtype=np.float32)
 
         for i in prange(n_traces):
-            grid_indices[i] = coords_grid_indices[indices[i]].ravel()
-            grid_weights[i] = (weights[i].reshape(-1, 1) * coords_grid_weights[indices[i]]).ravel()
+            trace_igrid_indices = igrid_averaging_indices[i]
+            trace_igrid_weights = igrid_averaging_weights[i].reshape(-1, 1)
 
-        return grid_indices, grid_weights
+            indices[i] = igrid_to_grid_indices[trace_igrid_indices].ravel()
+            weights[i] = (igrid_to_grid_weights[trace_igrid_indices] * trace_igrid_weights).ravel()
+
+        return indices, weights
+
+    @classmethod
+    def _get_slowness_averaging_params(cls, source_coords, receiver_coords, grid, slowness_grid_size):
+        # Construct an intermediate regular grid for faster neighbors search (igrid)
+        igrid_params = cls._get_intermediate_averaging_params(source_coords, receiver_coords, slowness_grid_size)
+        igrid_coords, igrid_averaging_indices, igrid_averaging_weights = igrid_params
+
+        # Get interpolation params for each coordinate of the intermediate grid
+        igrid_to_grid_indices, igrid_to_grid_weights = grid.get_interpolation_params(igrid_coords)
+
+        # Get parameters of complex interpolation: coords -> intermediate grid -> final grid
+        indices, weights = cls._combine_averaging_params(igrid_averaging_indices, igrid_to_grid_indices,
+                                                         igrid_averaging_weights, igrid_to_grid_weights)
+        return indices, weights
 
     # Loader creation
 
     def create_train_loader(self, batch_size, n_epochs, shuffle=True, drop_last=True, device=None, bar=True):
         train_tensors = [self.source_coords, self.source_elevations, self.source_indices, self.source_weights,
                          self.receiver_coords, self.receiver_elevations, self.receiver_indices, self.receiver_weights,
-                         self.grid_indices, self.grid_weights, self.target_traveltimes]
+                         self.mean_slowness_indices, self.mean_slowness_weights, self.target_traveltimes]
         loader = TensorDataLoader(*train_tensors, batch_size=batch_size, n_epochs=n_epochs,
                                   shuffle=shuffle, drop_last=drop_last, device=device)
         return tqdm(loader, desc="Iterations of model fitting", disable=not bar)
@@ -166,7 +208,7 @@ class TravelTimeDataset:
     def create_predict_loader(self, batch_size, n_epochs=1, shuffle=False, drop_last=False, device=None, bar=True):
         pred_tensors = [self.source_coords, self.source_elevations, self.source_indices, self.source_weights,
                         self.receiver_coords, self.receiver_elevations, self.receiver_indices, self.receiver_weights,
-                        self.grid_indices, self.grid_weights, self.traveltime_corrections]
+                        self.mean_slowness_indices, self.mean_slowness_weights, self.traveltime_corrections]
         loader = TensorDataLoader(*pred_tensors, batch_size=batch_size, n_epochs=n_epochs,
                                   shuffle=shuffle, drop_last=drop_last, device=device)
         return tqdm(loader, desc="Iterations of model inference", disable=not bar)

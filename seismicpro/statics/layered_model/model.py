@@ -311,10 +311,10 @@ class LayeredModel:
 
     def _estimate_traveltimes(self, source_coords, source_elevations, source_indices, source_weights,
                               receiver_coords, receiver_elevations, receiver_indices, receiver_weights,
-                              intermediate_ray_indices, intermediate_ray_weights):
+                              mean_slowness_indices, mean_slowness_weights):
         # Calculate an offset and mean slowness of each layer for each trace
         offsets = torch.sqrt(torch.sum((source_coords - receiver_coords)**2, axis=1))
-        mean_layer_slownesses = self._interpolate_layer_slownesses(intermediate_ray_indices, intermediate_ray_weights)
+        mean_layer_slownesses = self._interpolate_layer_slownesses(mean_slowness_indices, mean_slowness_weights)
 
         # Return direct traveltimes in case of a single-layer model
         if self.n_layers == 1:
@@ -378,8 +378,8 @@ class LayeredModel:
     # Dataset generation
 
     def create_dataset(self, survey=None, first_breaks_header=HDR_FIRST_BREAK, uphole_correction_method="auto",
-                       velocity_cell_size=250):
-        return self.grid.create_dataset(survey, first_breaks_header, uphole_correction_method, velocity_cell_size)
+                       slowness_grid_size=500):
+        return self.grid.create_dataset(survey, first_breaks_header, uphole_correction_method, slowness_grid_size)
 
     # Model fitting and inference
 
@@ -602,11 +602,9 @@ class LayeredModel:
         if survey is None:
             if not self.grid.has_survey:
                 raise ValueError("A survey to calculate statics for must be passed")
-            survey_list = self.grid.survey_list
-            is_single_survey = self.grid.is_single_survey
-        else:
-            survey_list = to_list(survey)
-            is_single_survey = isinstance(survey, Survey)
+            survey = self.grid.survey
+        survey_list = to_list(survey)
+        is_single_survey = isinstance(survey, Survey)
         _, uphole_correction_method_list = align_args(survey_list, uphole_correction_method)
 
         if source_id_cols is None:
