@@ -44,8 +44,8 @@ def _validate_trace_headers(headers, offset_atol=10, cdp_atol=10, elevation_atol
 
     n_traces = len(headers)
     loaded_columns = set(headers.columns)
-    empty_mask = headers.select((pl.col("*") == 0).all()).row(0)
-    empty_columns = {col for col, mask in zip(headers.columns, empty_mask) if mask}
+    empty_mask = headers.select((pl.col("*") == 0).all()).row(0, named=True)
+    empty_columns = {col for col, mask in empty_mask.items() if mask}
     non_empty_columns = loaded_columns - empty_columns
 
     shot_coords_cols = ["SourceX", "SourceY"]
@@ -199,11 +199,11 @@ def _validate_source_headers(headers, source_id_cols=None, width=80):
     if missing_cols:
         raise ValueError(f"The following source ID headers are not loaded: {', '.join(missing_cols)}")
 
-    empty_id_mask = headers.select((pl.col(source_id_cols) == 0).all()).row(0)
-    if any(empty_id_mask):
-        empty_id_cols = ", ".join([col for col, mask in zip(source_id_cols, empty_id_mask) if mask])
-        warn_str = ("No checks of source-related trace headers were performed since the following source ID headers " +
-                    f"are empty: {empty_id_cols}")
+    empty_id_mask = headers.select((pl.col(source_id_cols) == 0).all()).row(0, named=True)
+    empty_id_cols = [col for col, mask in empty_id_mask.items() if mask]
+    if empty_id_cols:
+        warn_str = ("No checks of source-related trace headers were performed since the following source ID headers "
+                    f"are empty: {', '.join(empty_id_cols)}")
         return "\n".join(wrap(warn_str, width=width))
 
     source_cols = {*source_id_cols, "SourceX", "SourceY", "SourceSurfaceElevation", "SourceUpholeTime", "SourceDepth"}
@@ -262,11 +262,11 @@ def _validate_receiver_headers(headers, receiver_id_cols=None, width=80):
     if missing_cols:
         raise ValueError(f"The following receiver ID headers are not loaded: {', '.join(missing_cols)}")
 
-    empty_id_mask = headers.select((pl.col(receiver_id_cols) == 0).all()).row(0)
-    if any(empty_id_mask):
-        empty_id_cols = ", ".join([col for col, mask in zip(receiver_id_cols, empty_id_mask) if mask])
-        warn_str = ("No checks of receiver-related trace headers were performed since the following receiver ID " +
-                    f"headers are empty: {empty_id_cols}")
+    empty_id_mask = headers.select((pl.col(receiver_id_cols) == 0).all()).row(0, named=True)
+    empty_id_cols = [col for col, mask in empty_id_mask.items() if mask]
+    if empty_id_cols:
+        warn_str = ("No checks of receiver-related trace headers were performed since the following receiver ID "
+                    f"headers are empty: {', '.join(empty_id_cols)}")
         return "\n".join(wrap(warn_str, width=width))
 
     receiver_cols = {*receiver_id_cols, "GroupX", "GroupY", "ReceiverGroupElevation"}
