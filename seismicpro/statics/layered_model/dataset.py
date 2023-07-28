@@ -274,7 +274,7 @@ class TravelTimeDataset:
         qc_df = pl.from_pandas(qc_df, rechunk=False, include_index=False)
         gather_data_dict = qc_df.partition_by(id_cols, maintain_order=True, as_dict=True)
         gather_data_list = [(df.select("SourceX", "SourceY").to_numpy(), df.select("GroupX", "GroupY").to_numpy(),
-                             df.select("True").to_numpy(), df.select("Pred").to_numpy())
+                             df.get_column("True").to_numpy(), df.get_column("Pred").to_numpy())
                             for df in gather_data_dict.values()]
         coords = pd.DataFrame(np.stack([df[coords_cols].row(0) for df in gather_data_dict.values()]),
                               columns=coords_cols)

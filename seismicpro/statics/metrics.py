@@ -25,7 +25,6 @@ class TravelTimeMetric(Metric):
 
     def get_gather(self, index, sort_by=None):
         pred_traveltimes = self.gather_data_dict[index].get_column("Pred").to_numpy()
-
         if len(self.survey_list) == 1:
             part = 0
         else:
@@ -33,12 +32,11 @@ class TravelTimeMetric(Metric):
             index = index[1:]
         survey = self.survey_list[part]
         gather = survey.get_gather(index, copy_headers=True)
-        if sort_by is not None:
-            gather = gather.sort(by=sort_by)
-
         true_first_breaks_header = self.first_breaks_header_list[part]
         pred_first_breaks_header = "Predicted " + true_first_breaks_header
         gather[pred_first_breaks_header] = pred_traveltimes
+        if sort_by is not None:
+            gather = gather.sort(by=sort_by)
         return gather, true_first_breaks_header, pred_first_breaks_header
 
     def plot_on_click(self, ax, coords, index, sort_by=None, **kwargs):
