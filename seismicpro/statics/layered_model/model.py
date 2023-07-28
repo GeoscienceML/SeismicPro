@@ -411,7 +411,7 @@ class LayeredModel:
         thicknesses_reg_coef = torch.tensor(thicknesses_reg_coef, dtype=torch.float32, device=self.device)
         thicknesses_reg_coef = torch.broadcast_to(thicknesses_reg_coef, (self.n_refractors,))
 
-        idw = IDWInterpolator(self.coords[dataset.used_coords_mask.to_numpy()], neighbors=n_reg_neighbors + 1)
+        idw = IDWInterpolator(self.coords[dataset.used_coords_mask.numpy()], neighbors=n_reg_neighbors + 1)
         neighbors_dist, neighbors_indices = idw.nearest_neighbors.query(self.coords, k=idw.neighbors[1:], workers=-1)
         neighbors_weights = idw._distances_to_weights(neighbors_dist)  # pylint: disable=protected-access
         neighbors_indices = torch.tensor(neighbors_indices, dtype=torch.int32, device=self.device)
@@ -463,7 +463,7 @@ class LayeredModel:
     @torch.no_grad()
     def interpolate_unused_coords(self, dataset):
         used_coords_mask = dataset.used_coords_mask
-        used_coords_mask_np = used_coords_mask.to_numpy()
+        used_coords_mask_np = used_coords_mask.numpy()
         if used_coords_mask_np.all():
             return
 
