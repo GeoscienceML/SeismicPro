@@ -1,14 +1,19 @@
+import os
 import math
+from concurrent.futures import ProcessPoolExecutor
 
 import torch
 import numpy as np
+import pandas as pd
 import polars as pl
 from numba import njit, prange
 from tqdm.auto import tqdm
 
 from .dataloader import TensorDataLoader
+from ..metrics import TravelTimeMetric, TRAVELTIME_QC_METRICS
 from ..utils import get_uphole_correction_method
-from ...utils import align_args
+from ...metrics import initialize_metrics
+from ...utils import to_list, align_args, ForPoolExecutor
 from ...const import HDR_FIRST_BREAK
 
 
@@ -219,3 +224,91 @@ class TravelTimeDataset:
         if not self.has_predictions:
             raise ValueError
         return torch.abs(self.pred_traveltimes - self.true_traveltimes).mean().item()
+
+    # Near-surface model QC
+
+    @staticmethod
+    def _calc_metrics(metrics, gather_data_list):
+        res = []
+        for gather_data in gather_data_list:
+            source_coords = gather_data[["SourceX", "SourceY"]].to_numpy()
+            receiver_coords = gather_data[["GroupX", "GroupY"]].to_numpy()
+            true_traveltimes = gather_data["True"].to_numpy()
+            pred_traveltimes = gather_data["Pred"].to_numpy()
+            metric_values = [metric(source_coords, receiver_coords, true_traveltimes, pred_traveltimes)
+                             for metric in metrics]
+            res.append(metric_values)
+        return res
+
+    def qc(self, metrics=None, by="source", id_cols=None, chunk_size=250, n_workers=None, bar=True):
+        if not self.has_predictions:
+            raise ValueError
+
+        if metrics is None:
+            metrics = TRAVELTIME_QC_METRICS
+        metrics, is_single_metric = initialize_metrics(metrics, metric_class=TravelTimeMetric)
+
+        by_to_cols = {
+            "source": ("source_id_cols", ["SourceX", "SourceY"]),
+            "shot": ("source_id_cols", ["SourceX", "SourceY"]),
+            "receiver": ("receiver_id_cols", ["GroupX", "GroupY"]),
+            "rec": ("receiver_id_cols", ["GroupX", "GroupY"]),
+        }
+        id_cols_attr, coords_cols = by_to_cols.get(by.lower())
+        if id_cols_attr is None:
+            raise ValueError(f"by must be one of {', '.join(by_to_cols.keys())} but {by} given.")
+
+        if id_cols is None:
+            id_cols_list = [getattr(survey, id_cols_attr) for survey in self.survey_list]
+            if any(item != id_cols_list[0] for item in id_cols_list):
+                raise ValueError("source/receiver id columns must be the same for all surveys")
+            id_cols = id_cols_list[0]
+            if id_cols is None:
+                raise ValueError
+        id_cols = to_list(id_cols)
+
+        id_cols_df_list = [survey.get_headers(id_cols) for survey in self.survey_list]
+        if len(self.survey_list) == 1:
+            qc_df = id_cols_df_list[0]
+        else:
+            id_cols = ["Part"] + id_cols
+            for i, df in enumerate(id_cols_df_list):
+                df["Part"] = i
+            qc_df = pd.concat(id_cols_df_list, ignore_index=True)
+        qc_df[["SourceX", "SourceY"]] = self.source_coords.numpy()
+        qc_df[["GroupX", "GroupY"]] = self.receiver_coords.numpy()
+        qc_df["True"] = self.true_traveltimes.numpy()
+        qc_df["Pred"] = self.pred_traveltimes.numpy()
+
+        qc_df = pl.from_pandas(qc_df, rechunk=False, include_index=False)
+        gather_data_dict = qc_df.partition_by(id_cols, maintain_order=True, as_dict=True)
+        gather_data_list = list(gather_data_dict.values())
+        coords = pd.DataFrame(np.stack([df[coords_cols].row(0) for df in gather_data_list]), columns=coords_cols)
+        index = pd.DataFrame(np.stack(list(gather_data_dict.keys())), columns=id_cols)
+
+        n_gathers = len(gather_data_list)
+        n_chunks, mod = divmod(n_gathers, chunk_size)
+        if mod:
+            n_chunks += 1
+        if n_workers is None:
+            n_workers = os.cpu_count()
+        n_workers = min(n_chunks, n_workers)
+        executor_class = ForPoolExecutor if n_workers == 1 else ProcessPoolExecutor
+
+        futures = []
+        with tqdm(total=n_gathers, desc="Gathers processed", disable=not bar) as pbar:
+            with executor_class(max_workers=n_workers) as pool:
+                for i in range(n_chunks):
+                    gather_data_chunk = gather_data_list[i * chunk_size : (i + 1) * chunk_size]
+                    future = pool.submit(self._calc_metrics, metrics, gather_data_chunk)
+                    future.add_done_callback(lambda fut: pbar.update(len(fut.result())))
+                    futures.append(future)
+
+        results = sum([future.result() for future in futures], [])
+        context = {"near_surface_model": self, "survey_list": self.survey_list,
+                   "first_breaks_header_list": self.first_breaks_header_list, "gather_data_dict": gather_data_dict}
+        metrics_maps = [metric.provide_context(**context).construct_map(coords, values, index=index)
+                        for metric, values in zip(metrics, zip(*results))]
+        if is_single_metric:
+            return metrics_maps[0]
+        return metrics_maps

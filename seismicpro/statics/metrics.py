@@ -11,17 +11,21 @@ class TravelTimeMetric(Metric):
         super().__init__(name=name)
 
         # Attributes set after context binding
-        self.nsm = None
+        self.near_surface_model = None
         self.survey_list = None
-        self.first_breaks_col = None
+        self.first_breaks_header_list = None
+        self.gather_data_dict = None
 
-    def bind_context(self, metric_map, nsm, survey_list, first_breaks_col):
-        self.nsm = nsm
+    def bind_context(self, metric_map, near_surface_model, survey_list, first_breaks_header_list, gather_data_dict):
+        self.near_surface_model = near_surface_model
         index_cols = metric_map.index_cols if len(survey_list) == 1 else metric_map.index_cols[1:]
-        self.survey_list = [sur.reindex(index_cols) for sur in survey_list]
-        self.first_breaks_col = first_breaks_col
+        self.survey_list = [survey.reindex(index_cols) for survey in survey_list]
+        self.first_breaks_header_list = first_breaks_header_list
+        self.gather_data_dict = gather_data_dict
 
     def get_gather(self, index, sort_by=None):
+        pred_traveltimes = self.gather_data_dict[index].get_column("Pred").to_numpy()
+
         if len(self.survey_list) == 1:
             part = 0
         else:
@@ -31,28 +35,28 @@ class TravelTimeMetric(Metric):
         gather = survey.get_gather(index, copy_headers=True)
         if sort_by is not None:
             gather = gather.sort(by=sort_by)
-        uphole_correction_method = self.nsm._get_uphole_correction_method(survey)
-        source_coords, receiver_coords, correction = self.nsm._get_predict_traveltime_data(gather, uphole_correction_method)
-        pred_traveltimes = self.nsm.estimate_traveltimes(source_coords, receiver_coords, bar=False) - correction
-        gather["Predicted " + self.first_breaks_col] = pred_traveltimes
-        return gather
+
+        true_first_breaks_header = self.first_breaks_header_list[part]
+        pred_first_breaks_header = "Predicted " + true_first_breaks_header
+        gather[pred_first_breaks_header] = pred_traveltimes
+        return gather, true_first_breaks_header, pred_first_breaks_header
 
     def plot_on_click(self, ax, coords, index, sort_by=None, **kwargs):
         _ = coords
-        gather = self.get_gather(index, sort_by)
-        gather.plot(ax=ax, event_headers=[self.nsm.first_breaks_col, "Predicted " + self.first_breaks_col], **kwargs)
+        gather, true_first_breaks_header, pred_first_breaks_header = self.get_gather(index, sort_by)
+        gather.plot(ax=ax, event_headers=[true_first_breaks_header, pred_first_breaks_header], **kwargs)
 
     def get_views(self, sort_by=None, **kwargs):
         return [partial(self.plot_on_click, sort_by=sort_by)], kwargs
 
 
-class MeanAbsoluteError(TravelTimeMetric):
+class MeanAbsoluteTravelTimeError(TravelTimeMetric):
     name = "mae"
     min_value = 0
     is_lower_better = True
 
-    def __call__(self, shots_coords, receivers_coords, true_traveltimes, pred_traveltimes):
-        _ = shots_coords, receivers_coords
+    def __call__(self, source_coords, receiver_coords, true_traveltimes, pred_traveltimes):
+        _ = source_coords, receiver_coords
         return np.abs(true_traveltimes - pred_traveltimes).mean()
 
 
@@ -83,17 +87,17 @@ class GeometryError(TravelTimeMetric):
                               bounds=((None, None), (-np.pi, np.pi)), method="Nelder-Mead", tol=1e-5)
         return fit_result.x
 
-    def __call__(self, shots_coords, receivers_coords, true_traveltimes, pred_traveltimes):
+    def __call__(self, source_coords, receiver_coords, true_traveltimes, pred_traveltimes):
         diff = true_traveltimes - pred_traveltimes
-        x, y = (receivers_coords - shots_coords).T
+        x, y = (receiver_coords - source_coords).T
         azimuth = np.arctan2(y, x)
         params = self.fit(azimuth, diff, reg=self.reg)
         return abs(params[0])
 
     def plot_diff_by_azimuth(self, ax, coords, index, **kwargs):
-        _ = coords
-        gather = self.get_gather(index)
-        diff = gather[self.first_breaks_col] - gather["Predicted " + self.first_breaks_col]
+        _ = coords, kwargs
+        gather, true_first_breaks_header, pred_first_breaks_header = self.get_gather(index)
+        diff = gather[true_first_breaks_header] - gather[pred_first_breaks_header]
         x, y = (gather[["GroupX", "GroupY"]] - gather[["SourceX", "SourceY"]]).T
         azimuth = np.arctan2(y, x)
 
@@ -106,4 +110,4 @@ class GeometryError(TravelTimeMetric):
         return [partial(self.plot_on_click, sort_by=sort_by), self.plot_diff_by_azimuth], kwargs
 
 
-TRAVELTIME_QC_METRICS = [MeanAbsoluteError, GeometryError]
+TRAVELTIME_QC_METRICS = [MeanAbsoluteTravelTimeError, GeometryError]
