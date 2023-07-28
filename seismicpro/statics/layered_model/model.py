@@ -190,7 +190,11 @@ class LayeredModel:
     # Interpolation-related methods
 
     def change_grid(self, grid, device="cpu"):
-        pass
+        self_slownesses = np.column_stack([self.weathering_slowness_tensor.detach().cpu().numpy(),
+                                           self.slownesses_tensor.detach().cpu().numpy()])
+        velocities = self.grid.interpolate(1000 / self_slownesses, grid)
+        elevations = self.grid.interpolate(self.elevations_tensor.detach().cpu().numpy(), grid)
+        return type(self)(grid, velocities=velocities, elevations=elevations, device=device)
 
     # Traveltime estimation
 
