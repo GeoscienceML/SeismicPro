@@ -49,7 +49,6 @@ class TravelTimeMetric(Metric):
 
 
 class MeanAbsoluteTravelTimeError(TravelTimeMetric):
-    name = "mae"
     min_value = 0
     is_lower_better = True
 
@@ -59,7 +58,6 @@ class MeanAbsoluteTravelTimeError(TravelTimeMetric):
 
 
 class GeometryError(TravelTimeMetric):
-    name = "geometry_error"
     min_value = 0
     is_lower_better = True
 
