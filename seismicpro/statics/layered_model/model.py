@@ -411,8 +411,11 @@ class LayeredModel:
         thicknesses_reg_coef = torch.tensor(thicknesses_reg_coef, dtype=torch.float32, device=self.device)
         thicknesses_reg_coef = torch.broadcast_to(thicknesses_reg_coef, (self.n_refractors,))
 
-        idw = IDWInterpolator(self.coords[dataset.used_coords_mask.numpy()], neighbors=n_reg_neighbors + 1)
+        used_coords_mask = dataset.used_coords_mask.numpy()
+        used_coords_indices = np.nonzero(used_coords_mask)[0]
+        idw = IDWInterpolator(self.coords[used_coords_mask], neighbors=n_reg_neighbors + 1)
         neighbors_dist, neighbors_indices = idw.nearest_neighbors.query(self.coords, k=idw.neighbors[1:], workers=-1)
+        neighbors_indices = used_coords_indices[neighbors_indices]
         neighbors_weights = idw._distances_to_weights(neighbors_dist)  # pylint: disable=protected-access
         neighbors_indices = torch.tensor(neighbors_indices, dtype=torch.int32, device=self.device)
         neighbors_weights = torch.tensor(neighbors_weights, dtype=torch.float32, device=self.device)
@@ -458,10 +461,10 @@ class LayeredModel:
     def _interpolate_tensor(self, tensor, used_coords_grid, unused_coords_grid, used_coords_mask):
         used_tensor_np = tensor[used_coords_mask].detach().cpu().numpy()
         unused_tensor_np = used_coords_grid.interpolate(used_tensor_np, unused_coords_grid)
-        self.tensor.data[~used_coords_mask] = torch.from_numpy(unused_tensor_np).to(self.device)
+        tensor.data[~used_coords_mask] = torch.tensor(unused_tensor_np, dtype=torch.float32, device=self.device)
 
     @torch.no_grad()
-    def interpolate_unused_coords(self, dataset):
+    def interpolate_unused_points(self, dataset):
         used_coords_mask = dataset.used_coords_mask
         used_coords_mask_np = used_coords_mask.numpy()
         if used_coords_mask_np.all():
@@ -504,7 +507,7 @@ class LayeredModel:
             self.elevations_reg_hist.append(elevations_reg.item())
             self.thicknesses_reg_hist.append(thicknesses_reg.item())
 
-        self.interpolate_unused_coords(dataset)
+        self.interpolate_unused_points(dataset)
 
     def predict(self, dataset, batch_size=1000000, bar=True, store_to_survey=True,
                 predicted_first_breaks_header="PredictedFirstBreak"):
