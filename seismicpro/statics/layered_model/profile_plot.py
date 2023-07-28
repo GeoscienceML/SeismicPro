@@ -3,12 +3,16 @@ from functools import partial
 import numpy as np
 
 from ...metrics import MetricMap
-from ...utils import get_first_defined, add_colorbar, InteractivePlot, DropdownViewPlot, PairedPlot
+from ...utils import get_first_defined, add_colorbar, get_text_formatting_kwargs, set_ticks
+from ...utils import InteractivePlot, DropdownViewPlot, PairedPlot
 
 
 class ProfilePlot(PairedPlot):
-    def __init__(self, model, figsize=(4.5, 4.5), orientation="horizontal", sampling_interval=50, min_velocity=None,
-                 max_velocity=None, **kwargs):
+    def __init__(self, model, sampling_interval=50, min_velocity=None, max_velocity=None, figsize=(4.5, 4.5),
+                 fontsize=8, orientation="horizontal", **kwargs):
+        kwargs = {"fontsize": fontsize, **kwargs}
+        self.text_kwargs = get_text_formatting_kwargs(**kwargs)
+
         self.n_refractors = model.n_refractors
         self.sampling_interval = sampling_interval
 
@@ -47,20 +51,23 @@ class ProfilePlot(PairedPlot):
 
     def construct_main_plot(self):
         """Construct a sliceable multi-view plot of parameters of the near-surface velocity model."""
-        return DropdownViewPlot(plot_fn=self.plot_fn, slice_fn=self.slice_fn, title=self.titles,
-                                preserve_clicks_on_view_change=True)
+        return DropdownViewPlot(plot_fn=self.plot_fn, slice_fn=partial(self.slice_fn, **self.text_kwargs),
+                                unclick_fn=self.unclick, title=self.titles, preserve_clicks_on_view_change=True)
 
     def construct_aux_plot(self):
         """Construct a plot of a velocity model profile."""
         toolbar_position = "right" if self.orientation == "horizontal" else "left"
-        return InteractivePlot(figsize=self.figsize, toolbar_position=toolbar_position)
+        aux_plot = InteractivePlot(figsize=self.figsize, toolbar_position=toolbar_position)
+        aux_plot.box.layout.visibility = "hidden"
+        return aux_plot
 
-    def slice_fn(self, start_coords, stop_coords):
+    def slice_fn(self, start_coords, stop_coords, **kwargs):
         """Display a profile of near-surface velocity model from `start_coords` to `stop_coords`."""
         x_start, y_start = start_coords
         x_stop, y_stop = stop_coords
         offset = np.sqrt((x_start - x_stop)**2 + (y_start - y_stop)**2)
         n_points = max(int(offset // self.sampling_interval), 2)
+        dist_along_profile = np.linspace(0, offset, n_points)
         x_linspace = np.linspace(x_start, x_stop, n_points)
         y_linspace = np.linspace(y_start, y_stop, n_points)
         slice_coords = np.column_stack([x_linspace, y_linspace])
@@ -80,3 +87,12 @@ class ProfilePlot(PairedPlot):
             self.aux.ax.plot(elevations[i], color="black")
         add_colorbar(self.aux.ax, filling, True)
         self.aux.ax.set_ylim(self.min_elevation, self.max_elevation)
+
+        self.aux.set_title(f"A profile from ({int(x_start)}, {int(y_start)}) to ({int(x_stop)}, {int(y_stop)})")
+        set_ticks(self.aux.ax, "x", label="Distance along the profile, m", major_labels=dist_along_profile, **kwargs)
+        set_ticks(self.aux.ax, "y", label="Elevation, m", **kwargs)
+        self.aux.box.layout.visibility = "visible"
+
+    def unclick(self):
+        self.aux.clear()
+        self.aux.box.layout.visibility = "hidden"
