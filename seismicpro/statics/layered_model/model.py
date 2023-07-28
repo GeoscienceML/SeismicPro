@@ -399,7 +399,7 @@ class LayeredModel:
 
         self.weathering_slowness_tensor.clip_(min=self.slownesses_tensor[:, 0])
 
-    def prepare_regularization_tensors(self, n_reg_neighbors=32,  velocities_reg_coef=1, elevations_reg_coef=0.5,
+    def prepare_regularization_tensors(self, dataset, n_reg_neighbors=32,  velocities_reg_coef=1, elevations_reg_coef=0.5,
                                        thicknesses_reg_coef=0.5):
         if n_reg_neighbors is None or n_reg_neighbors == 0:
             return None, None, None, None, None
@@ -411,7 +411,7 @@ class LayeredModel:
         thicknesses_reg_coef = torch.tensor(thicknesses_reg_coef, dtype=torch.float32, device=self.device)
         thicknesses_reg_coef = torch.broadcast_to(thicknesses_reg_coef, (self.n_refractors,))
 
-        idw = IDWInterpolator(self.coords, neighbors=n_reg_neighbors + 1)
+        idw = IDWInterpolator(self.coords[dataset.used_coords_mask.to_numpy()], neighbors=n_reg_neighbors + 1)
         neighbors_dist, neighbors_indices = idw.nearest_neighbors.query(self.coords, k=idw.neighbors[1:], workers=-1)
         neighbors_weights = idw._distances_to_weights(neighbors_dist)  # pylint: disable=protected-access
         neighbors_indices = torch.tensor(neighbors_indices, dtype=torch.int32, device=self.device)
@@ -455,10 +455,29 @@ class LayeredModel:
 
         return velocities_reg, elevations_reg, thicknesses_reg
 
+    def _interpolate_tensor(self, tensor, used_coords_grid, unused_coords_grid, used_coords_mask):
+        used_tensor_np = tensor[used_coords_mask].detach().cpu().numpy()
+        unused_tensor_np = used_coords_grid.interpolate(used_tensor_np, unused_coords_grid)
+        self.tensor.data[~used_coords_mask] = torch.from_numpy(unused_tensor_np).to(self.device)
+
+    @torch.no_grad()
+    def interpolate_unused_coords(self, dataset):
+        used_coords_mask = dataset.used_coords_mask
+        used_coords_mask_np = used_coords_mask.to_numpy()
+        if used_coords_mask_np.all():
+            return
+
+        used_coords_grid = self.grid[used_coords_mask_np]
+        unused_coords_grid = self.grid[~used_coords_mask_np]
+        self._interpolate_tensor(self.weathering_slowness_tensor, used_coords_grid, unused_coords_grid,
+                                 used_coords_mask)
+        self._interpolate_tensor(self.slownesses_tensor, used_coords_grid, unused_coords_grid, used_coords_mask)
+        self._interpolate_tensor(self.elevations_tensor, used_coords_grid, unused_coords_grid, used_coords_mask)
+
     def fit(self, dataset, batch_size=250000, n_epochs=5, n_reg_neighbors=32, velocities_reg_coef=1,
             elevations_reg_coef=0.5, thicknesses_reg_coef=0.5, bar=True):
-        reg_tensors = self.prepare_regularization_tensors(n_reg_neighbors, velocities_reg_coef, elevations_reg_coef,
-                                                          thicknesses_reg_coef)
+        reg_tensors = self.prepare_regularization_tensors(dataset, n_reg_neighbors, velocities_reg_coef,
+                                                          elevations_reg_coef, thicknesses_reg_coef)
         loader = dataset.create_train_loader(batch_size=batch_size, n_epochs=n_epochs, shuffle=True, drop_last=True,
                                              device=self.device, bar=bar)
         for *params, target_traveltimes in loader:
@@ -484,6 +503,8 @@ class LayeredModel:
             self.velocities_reg_hist.append(velocities_reg.item())
             self.elevations_reg_hist.append(elevations_reg.item())
             self.thicknesses_reg_hist.append(thicknesses_reg.item())
+
+        self.interpolate_unused_coords(dataset)
 
     def predict(self, dataset, batch_size=1000000, bar=True, store_to_survey=True,
                 predicted_first_breaks_header="PredictedFirstBreak"):

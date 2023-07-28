@@ -49,15 +49,15 @@ class TravelTimeDataset:
         # Get indices of grid coords, appeared either in source_indices or receiver_indices
         used_source_mask = np.bincount(source_indices.ravel(), minlength=self.grid.n_coords) > 0
         used_receiver_mask = np.bincount(receiver_indices.ravel(), minlength=self.grid.n_coords) > 0
-        used_grid_mask = used_source_mask | used_receiver_mask
-        used_grid_indices = np.require(np.nonzero(used_grid_mask)[0], dtype=np.int32)
-        self.used_grid_mask = torch.from_numpy(used_grid_mask)
+        used_coords_mask = used_source_mask | used_receiver_mask
+        used_coords_indices = np.require(np.nonzero(used_coords_mask)[0], dtype=np.int32)
+        self.used_coords_mask = torch.from_numpy(used_coords_mask)
 
         # Construct an interpolation grid for mean slowness estimation and get interpolation indices and weights for
         # each trace
         indices, weights = self._get_slowness_averaging_params(source_coords, receiver_coords,
-                                                               grid[used_grid_indices], slowness_grid_size)
-        self.mean_slowness_indices = torch.from_numpy(used_grid_indices[indices])
+                                                               grid[used_coords_indices], slowness_grid_size)
+        self.mean_slowness_indices = torch.from_numpy(used_coords_indices[indices])
         self.mean_slowness_weights = torch.from_numpy(weights)
 
     @property
