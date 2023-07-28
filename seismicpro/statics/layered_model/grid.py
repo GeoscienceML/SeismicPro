@@ -38,7 +38,7 @@ class SpatialGrid:
 
     @property
     def has_survey(self):
-        return self.survey_list is not None
+        return self.survey is not None
 
     @staticmethod
     def process_coords(coords):
