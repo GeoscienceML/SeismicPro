@@ -187,6 +187,11 @@ class LayeredModel:
 #         params_df[velocity_cols[1:]] = 1000 / self.slownesses_tensor.detach().cpu().numpy()
 #         dump_dataframe(params_df, path, has_header=True, encoding=encoding)
 
+    # Interpolation-related methods
+
+    def change_grid(self, grid, device="cpu"):
+        pass
+
     # Traveltime estimation
 
     @staticmethod
