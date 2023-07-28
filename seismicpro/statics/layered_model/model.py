@@ -677,16 +677,20 @@ class LayeredModel:
 
     # Model visualization
 
-    def plot_loss(self):
-        _, ((ax1, ax2), (ax3, ax4)) = plt.subplots(ncols=2, nrows=2, figsize=(12, 8), tight_layout=True)
-        ax1.plot(self.loss_hist)
-        ax1.set_title("Traveltime MAE")
-        ax2.plot(self.velocities_reg_hist)
-        ax2.set_title("Weighted velocities interpolation MAPE")
-        ax3.plot(self.elevations_reg_hist)
-        ax3.set_title("Weighted elevations interpolation MAE")
-        ax4.plot(self.thicknesses_reg_hist)
-        ax4.set_title("Weighted thicknesses interpolation MAE")
+    def plot_loss(self, show_reg=True, figsize=(10, 3)):
+        n_rows = 4 if show_reg else 1
+        width, height = figsize
+        figsize = (width, height * n_rows)
+        axes = plt.subplots(nrows=n_rows, sharex=True, squeeze=False, tight_layout=True, figsize=figsize)[1].ravel()
+        axes[0].plot(self.loss_hist)
+        axes[0].set_title("Traveltime MAE")
+        if show_reg:
+            axes[1].plot(self.velocities_reg_hist)
+            axes[1].set_title("Weighted velocities interpolation MAPE")
+            axes[2].plot(self.elevations_reg_hist)
+            axes[2].set_title("Weighted elevations interpolation MAE")
+            axes[3].plot(self.thicknesses_reg_hist)
+            axes[3].set_title("Weighted thicknesses interpolation MAE")
 
     def plot_profile(self, **kwargs):
         return ProfilePlot(self, **kwargs).plot()
