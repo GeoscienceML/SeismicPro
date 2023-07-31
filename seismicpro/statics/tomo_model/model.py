@@ -1,6 +1,8 @@
 import numpy as np
 from numba import njit, prange
 
+from .profile_plot import ProfilePlot
+
 
 class TomoModel:
     def __init__(self, grid, velocities):
@@ -47,3 +49,8 @@ class TomoModel:
         if grid.has_survey:
             velocity_grid[grid.air_mask] = 330
         return cls(grid, velocity_grid)
+
+    # Model visualization
+
+    def plot_profile(self, **kwargs):
+        return ProfilePlot(self, **kwargs).plot()

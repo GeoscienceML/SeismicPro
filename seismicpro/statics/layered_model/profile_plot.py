@@ -52,7 +52,8 @@ class ProfilePlot(PairedPlot):
     def construct_main_plot(self):
         """Construct a sliceable multi-view plot of parameters of the near-surface velocity model."""
         return DropdownViewPlot(plot_fn=self.plot_fn, slice_fn=partial(self.slice_fn, **self.text_kwargs),
-                                unclick_fn=self.unclick, title=self.titles, preserve_clicks_on_view_change=True)
+                                unclick_fn=self.unclick, title=self.titles, preserve_clicks_on_view_change=True,
+                                figsize=self.figsize)
 
     def construct_aux_plot(self):
         """Construct a plot of a velocity model profile."""
