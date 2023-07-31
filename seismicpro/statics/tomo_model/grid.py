@@ -8,13 +8,17 @@ from ...utils import to_list, IDWInterpolator
 
 class Grid3D:
     def __init__(self, origin, shape, cell_size, survey=None):
-        self.origin = np.broadcast_to(origin, 3)
-        self.cell_size = np.broadcast_to(cell_size, 3)
+        origin = np.broadcast_to(origin, 3)
+        cell_size = np.broadcast_to(cell_size, 3)
         if (cell_size <= 0).any():
             raise ValueError
-        self.shape = np.broadcast_to(shape, 3).astype(np.int32, casting="safe")
+        shape = np.broadcast_to(shape, 3).astype(np.int32, casting="same_kind")
         if (shape <= 0).any():
             raise ValueError
+
+        self.origin = origin
+        self.cell_size = cell_size
+        self.shape = shape
         self.survey = survey
         self.air_mask = None
         if survey is not None:
@@ -30,7 +34,7 @@ class Grid3D:
         nz, nx, ny = self.shape
         dz, dx, dy = self.cell_size
 
-        headers = pl.concat([sur.get_polars_headers() for sur in to_list(self.survey)], rechunk=False)
+        headers = pl.concat([sur.get_polars_headers().lazy() for sur in to_list(self.survey)], rechunk=False)
         source_elevations = headers.select([
             pl.col("SourceX").alias("X"),
             pl.col("SourceY").alias("Y"),
@@ -72,6 +76,6 @@ class Grid3D:
         ny = math.ceil((y_max - y_min) / dy)
 
         origin = (z_min, x_min, y_min)
+        shape = (nz, nx, ny)
         cell_size = (dz, dx, dy)
-        grid_shape = (nz, nx, ny)
-        return cls(origin, cell_size, grid_shape, survey=survey)
+        return cls(origin, shape, cell_size, survey=survey)

@@ -1,13 +1,11 @@
 import numpy as np
 from numba import njit, prange
 
-from .profile_plot import ProfilePlot
-
 
 class TomoModel:
     def __init__(self, grid, velocities):
         velocities = np.require(velocities, dtype=np.float32)
-        if velocities.shape != grid.shape:
+        if not np.array_equal(velocities.shape, grid.shape):
             raise ValueError
 
         self.grid = grid
