@@ -1,18 +1,22 @@
+import math
+from concurrent.futures import ThreadPoolExecutor
+
 import torch
 import numpy as np
 from numba import njit, prange
+from fteikpy import Eikonal3D
 
+from .raytracing import describe_rays
 from .profile_plot import ProfilePlot
 
 
 class TomoModel:
     def __init__(self, grid, velocities):
-        velocities = np.require(velocities, dtype=np.float32)
         if not np.array_equal(velocities.shape, grid.shape):
             raise ValueError
 
         self.grid = grid
-        self.velocities_tensor = torch.from_numpy(velocities)
+        self.velocities_tensor = torch.tensor(velocities, dtype=torch.float32, requires_grad=True)
 
     # IO
 
@@ -57,6 +61,70 @@ class TomoModel:
             raise ValueError
         velocities = np.linspace(bottom_velocity, top_velocity, grid.shape[0]).reshape(-1, 1, 1)
         return cls(grid, np.broadcast_to(velocities, grid.shape))
+
+    # Traveltime estimation
+
+    def crop_model(self, source, receivers, spatial_margin=3):
+        min_coords = np.minimum(source[1:], receivers[:, 1:].min(axis=0))
+        ix_min, iy_min = (min_coords - self.grid.origin[1:]) / self.grid.cell_size[1:]
+        ix_min = max(math.floor(ix_min) - spatial_margin, 0)
+        iy_min = max(math.floor(iy_min) - spatial_margin, 0)
+
+        max_coords = np.maximum(source[1:], receivers[:, 1:].max(axis=0))
+        ix_max, iy_max = (max_coords - self.grid.origin[1:]) / self.grid.cell_size[1:]
+        ix_max = math.floor(ix_max) + spatial_margin
+        iy_max = math.floor(iy_max) + spatial_margin
+
+        x_min = self.grid.origin[1] + ix_min * self.grid.cell_size[1]
+        y_min = self.grid.origin[2] + iy_min * self.grid.cell_size[2]
+        origin = (self.grid.origin[0], x_min, y_min)
+        return Eikonal3D(self.velocities[:, ix_min:ix_max+1, iy_min:iy_max+1], self.grid.cell_size, origin)
+
+    def describe_rays(self, source, receivers, spatial_margin=3, n_sweeps=2, max_n_steps=None):
+        cropped_grid = self.crop_model(source, receivers, spatial_margin=spatial_margin)
+        tt_grid = cropped_grid.solve(source, nsweep=n_sweeps, return_gradient=True)
+        z_grad, x_grad, y_grad = tt_grid.gradient
+
+        if max_n_steps is None:
+            nz, nx, ny = tt_grid.shape
+            max_n_steps = 2 * nz + nx + ny
+
+        origin = np.require(self.grid.origin, dtype=np.float64)
+        cell_size = np.require(self.grid.cell_size, dtype=np.float64)
+        ray_params = describe_rays(source, receivers, self.velocities, origin, cell_size, z_grad.grid, x_grad.grid,
+                                   y_grad.grid, tt_grid.zaxis, tt_grid.xaxis, tt_grid.yaxis, max_n_steps=max_n_steps)
+        return tt_grid, *ray_params
+
+    @torch.no_grad()
+    def estimate_traveltimes(self, source, receivers, spatial_margin=3, n_sweeps=2, max_n_steps=None):
+        ray_params = self.describe_rays(source, receivers, spatial_margin=spatial_margin, n_sweeps=n_sweeps,
+                                        max_n_steps=max_n_steps)
+        tt_grid, _, _, succeeded, trace_indices, cell_indices, cell_passes = ray_params
+
+        n_succeeded = succeeded.sum()
+        tt_pred = np.empty(len(receivers), dtype=np.float32)
+        if n_succeeded != len(receivers):
+            tt_pred[~succeeded] = tt_grid(receivers[~succeeded])
+
+        tt_pred_tensor = torch.zeros(n_succeeded, dtype=torch.float64)
+        trace_indices = torch.from_numpy(trace_indices)
+        cell_indices = torch.from_numpy(cell_indices)
+        cell_passes = torch.from_numpy(cell_passes)
+
+        cell_velocities = torch.index_select(self.velocities_tensor.ravel(), 0, cell_indices)
+        tt_pred_tensor.scatter_add_(0, trace_indices, 1000 * cell_passes / cell_velocities)
+        tt_pred[succeeded] = tt_pred_tensor.detach().numpy()
+        return tt_pred
+
+    def estimate_traveltimes_batch(self, batch, spatial_margin=3, n_sweeps=2, max_n_steps=None):
+        futures = []
+        n_workers = min(80, len(batch))
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            for source, receivers in batch:
+                future = pool.submit(self.estimate_traveltimes, source, receivers, spatial_margin=spatial_margin,
+                                     n_sweeps=n_sweeps, max_n_steps=max_n_steps)
+                futures.append(future)
+        return [future.result() for future in futures]
 
     # Model visualization
 
