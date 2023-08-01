@@ -1,0 +1,9 @@
+*.pyc
+__pycache__/
+.cache/
+.pytest_cache/
+.ipynb_checkpoints/
+.vscode/
+
+# Ignore SEGY files
+*.sgy

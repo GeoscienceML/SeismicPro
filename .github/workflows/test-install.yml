@@ -1,0 +1,123 @@
+name: Test installation
+
+on:
+  push:
+    branches:
+    - master
+  pull_request:
+    branches:
+    - master
+
+jobs:
+
+# -----------------------------------------
+#    Use a module from local source
+# -----------------------------------------
+  use_as_local_module:
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: [3.8, 3.9]
+
+    env:
+      PYTEST_FLAGS: "not slow ${{ matrix.os != 'ubuntu-latest' && 'and not linux_only' || '' }}"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Set up Python ${{ matrix.python-version }} on ${{ matrix.os }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Checkout SeismicPro
+      uses: actions/checkout@v2
+
+    - name: Install requirements
+      run: |
+        pip install --user -U pip
+        pip install --user -U pytest
+        pip install --user -r requirements.txt
+
+    - name: Import SeismicPro
+      run: python -c 'import seismicpro'
+
+    - name: Run basic tests
+      run: pytest -m "$PYTEST_FLAGS" --disable-pytest-warnings -v seismicpro/tests
+      shell: bash
+
+
+# -----------------------------------------
+#    Install with pip
+# -----------------------------------------
+  install_with_pip:
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: [3.8, 3.9]
+
+    env:
+      PYTEST_FLAGS: "not slow ${{ matrix.os != 'ubuntu-latest' && 'and not linux_only' || '' }}"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Set up Python ${{ matrix.python-version }} on ${{ matrix.os }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install with pip
+      run: |
+        pip install --user -U pip
+        pip install --user -U wheel pytest
+        pip install --user git+https://github.com/${{ github.event.repository.full_name }}.git@${{ github.sha }}#egg=SeismicPro
+
+    - name: Import SeismicPro
+      run: python -c 'import seismicpro'
+
+    - name: Run basic tests
+      run: pytest -m "$PYTEST_FLAGS" --disable-pytest-warnings -v --pyargs seismicpro.tests
+      shell: bash
+
+
+# -----------------------------------------
+#    Install with pipenv
+# -----------------------------------------
+  install_with_pipenv:
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: [3.8, 3.9]
+
+    env:
+      PYTEST_FLAGS: "not slow ${{ matrix.os != 'ubuntu-latest' && 'and not linux_only' || '' }}"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Set up Python ${{ matrix.python-version }} on ${{ matrix.os }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install with pipenv
+      run: |
+        pip install --user -U pip
+        pip install --user -U wheel pipenv
+        pipenv --python ${{ matrix.python-version }}
+        pipenv install pytest
+        pipenv install git+https://github.com/${{ github.event.repository.full_name }}.git@${{ github.sha }}#egg=SeismicPro
+
+    - name: Import SeismicPro
+      run: pipenv run python -c 'import seismicpro'
+
+    - name: Run basic tests
+      run: pipenv run python -m pytest -m "$PYTEST_FLAGS" --disable-pytest-warnings -v --pyargs seismicpro.tests
+      shell: bash

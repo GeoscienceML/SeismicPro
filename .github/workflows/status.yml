@@ -1,0 +1,29 @@
+name: Status
+
+on: push
+
+jobs:
+
+  lint-test:
+
+    runs-on: ubuntu-latest
+
+    container:
+      image: analysiscenter1/ds-py3:latest
+
+    steps:
+    - name: Checkout SeismicPro
+      uses: actions/checkout@v2
+
+    - name: Install requirements
+      run: |
+        pip install --user -U pip
+        pip install --user -U pylint
+        pip install --user -U pytest
+        pip install --user -r requirements.txt
+
+    - name: Check pylint
+      run: pylint -rn --rcfile pylintrc seismicpro
+
+    - name: Run tests
+      run: pytest -m "not slow" --disable-pytest-warnings -v seismicpro/tests

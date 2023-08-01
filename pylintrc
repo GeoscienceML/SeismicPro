@@ -1,0 +1,26 @@
+[MASTER]
+extension-pkg-whitelist=numpy
+init-hook='import sys; sys.path.append(".")'
+
+[FORMAT]
+max-line-length=120
+max-attributes=8
+max-args=10
+max-locals=25
+variable-rgx=([a-z][a-z0-9_]{1,30}|[a-z_])$ # snake_case + single letters
+argument-rgx=([a-z][a-z0-9_]{1,30}|[a-z_])$ # snake_case + single letters
+
+[MESSAGE CONTROL]
+disable=no-member, no-value-for-parameter, too-many-locals, too-few-public-methods, too-many-public-methods,
+        too-many-branches, unsubscriptable-object, too-many-star-expressions, duplicate-code, not-context-manager,
+        too-many-lines, global-statement, locally-disabled, wrong-import-position, invalid-sequence-index,
+        redundant-keyword-arg, bad-super-call, no-self-argument, redefined-builtin, arguments-differ,
+        len-as-condition, keyword-arg-before-vararg, assignment-from-none, useless-return, useless-import-alias,
+        unnecessary-pass, cyclic-import, assignment-from-no-return, comparison-with-callable, unnecessary-lambda,
+        no-method-argument, blacklisted-name, unbalanced-tuple-unpacking
+
+[TYPECHECK]
+ignored-modules=numpy
+
+[MISCELLANEOUS]
+notes=
