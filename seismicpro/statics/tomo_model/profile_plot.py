@@ -43,9 +43,9 @@ class ProfilePlot(PairedPlot):
         self.max_depth = z_min + dz * nz
         self.curr_depth = (self.max_depth + self.min_depth) / 2
 
-        self.velocity_grid = self.model.velocities
+        self.velocity_grid = self.model.velocities_tensor.numpy()
         if self.model.grid.has_survey:
-            self.velocity_grid[self.model.grid.air_mask] = np.nan
+            self.velocity_grid = np.where(self.model.grid.air_mask, np.nan, self.velocity_grid)
         self.min_velocity = get_first_defined(min_velocity, np.nanmin(self.velocity_grid))
         self.max_velocity = get_first_defined(max_velocity, np.nanmax(self.velocity_grid))
 

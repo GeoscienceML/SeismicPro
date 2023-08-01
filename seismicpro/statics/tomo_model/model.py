@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 from numba import njit, prange
 
@@ -11,7 +12,7 @@ class TomoModel:
             raise ValueError
 
         self.grid = grid
-        self.velocities = velocities
+        self.velocities_tensor = torch.from_numpy(velocities)
 
     # IO
 
