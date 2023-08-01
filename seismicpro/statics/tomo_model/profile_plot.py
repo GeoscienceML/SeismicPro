@@ -50,7 +50,7 @@ class ProfilePlot(PairedPlot):
         self.max_velocity = get_first_defined(max_velocity, np.nanmax(self.velocity_grid))
 
         coords = np.array(np.meshgrid(self.x_cell_centers, self.y_cell_centers)).T.reshape(-1, 2)
-        values = model.velocities.transpose([1, 2, 0]).reshape(-1, nz)
+        values = self.velocity_grid.transpose([1, 2, 0]).reshape(-1, nz)
         self.interpolator = IDWInterpolator(coords, values, neighbors=4)
 
         self.figsize = figsize
