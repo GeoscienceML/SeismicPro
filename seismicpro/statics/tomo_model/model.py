@@ -50,6 +50,13 @@ class TomoModel:
             velocity_grid[grid.air_mask] = 330
         return cls(grid, velocity_grid)
 
+    @classmethod
+    def from_gradient_model(cls, grid, top_velocity, bottom_velocity):
+        if (top_velocity <= 0) or (bottom_velocity <= 0):
+            raise ValueError
+        velocities = np.linspace(bottom_velocity, top_velocity, grid.shape[0]).reshape(-1, 1, 1)
+        return cls(grid, np.broadcast_to(velocities, grid.shape))
+
     # Model visualization
 
     def plot_profile(self, **kwargs):
