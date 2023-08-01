@@ -638,8 +638,8 @@ class RefractorVelocityField(SpatialField):
     #pylint: disable-next=invalid-name
     def qc(self, metrics=None, survey=None, first_breaks_header=HDR_FIRST_BREAK, correct_uphole=None,
            n_workers=None, bar=True, chunk_size=250):
-
         """Perform quality control of the first breaks given the near-surface velocity model.
+
         By default, the following metrics are calculated:
         * The first break outliers metric. A first break time is considered to be an outlier if it differs from the
         expected arrival time defined by an offset-traveltime curve by more than a given threshold.

@@ -476,8 +476,7 @@ class FirstBreaksCorrelations(RefractorVelocityMetric):
 class DivergencePoint(RefractorVelocityMetric):
     """The divergence point metric for first breaks.
     Find an offset after that first breaks are most likely to diverge from expected time.
-    Such an offset is defined as one after that the cumulative mean of absolute deviations from expected time
-    exceeds the given tolerance.
+    Such an offset is defined as the last that preserves tolerable mean absolute deviation from expected time.
 
     Parameters
     ----------
@@ -541,8 +540,7 @@ class DivergencePoint(RefractorVelocityMetric):
         rv_times = refractor_velocity(offsets)
         deviations = np.abs(rv_times - times)
         div_offset = self._calc(offsets, deviations, self.tol)
-        metric = np.empty_like(offsets)
-        metric.fill(div_offset)
+        metric = np.full_like(offsets, div_offset)
         return metric
 
     def binarize(self, gather, metric_values, threshold=None):
@@ -565,9 +563,9 @@ class DivergencePoint(RefractorVelocityMetric):
         gather = self.survey.get_gather(index)
         rv = self.field(coords, is_geographic=self.is_geographic)
         divergence_offset = self.calc(gather, rv)[0]
-        ax.axvline(x=divergence_offset, color="k", linestyle="--", label='divergence offset')
         title = f"Divergence point: {divergence_offset} m"
         super().plot_refractor_velocity(coords, ax, index, title=title, **kwargs)
+        ax.axvline(x=divergence_offset, color="k", linestyle="--")
 
 REFRACTOR_VELOCITY_QC_METRICS = [FirstBreaksOutliers, FirstBreaksPhases, FirstBreaksCorrelations,
                                  FirstBreaksAmplitudes, DivergencePoint]
