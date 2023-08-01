@@ -1,6 +1,7 @@
 """AVO"""
 
 import numpy as np
+import polars as pl
 import seaborn as sns
 import matplotlib.pyplot as plt
 
@@ -15,20 +16,56 @@ class AmplitudeOffsetDistribution:
         self.name = name
 
         headers = headers.copy(deep=False)
+        headers.reset_index(inplace=True)
+        headers['offset'] = headers['offset'].abs()
+
+        headers = pl.from_pandas(headers, rechunk=False)
+        # Avoid negative offsets
         if isinstance(bin_size, (int, np.integer)):
             bin_bounds = np.arange(0, headers["offset"].max()+bin_size, bin_size)
         else:
             bin_bounds = np.cumsum([0, *bin_size])
 
         # Subtract 1 to start at offset 0 instead of `bin_size`
-        bin_bounds_ixs = np.searchsorted(bin_bounds, headers["offset"], side='right') - 1
-        headers["bin"] = bin_bounds[np.clip(bin_bounds_ixs, 0, len(bin_bounds))]
-        self.stats_df = headers.groupby([*to_list(indexed_by), "bin"], as_index=False)[avo_column].mean()
-        self.bins_df = self.stats_df.groupby("bin", as_index=False)[avo_column].mean()
+        headers = headers.with_columns(
+            (pl.lit(bin_bounds)
+               .search_sorted(pl.col('offset'), side='right') - 1)
+               .clip(0, len(bin_bounds))
+               .alias('bin_ix')
+        )
+
+        # Change bin indices to actual offset values on the bounds
+        headers = headers.with_columns(pl.lit(bin_bounds).take(pl.col('bin_ix')).alias('bin'))
+
+        # Find for each gather mean AVO value in each bin
+        stats_df = headers.groupby([*indexed_by, "bin"]).agg(pl.col(avo_column).mean())
+
+        bins_groupby = stats_df.groupby("bin")
+        # Compute mean AVO value for each bin
+        bins_df = bins_groupby.agg(pl.col(avo_column).mean())
+
+        # Add polynomial approximation for every bin
+        bins_df = self._calculate_bin_polynomial(bins_df, pol_degree=pol_degree)
 
         # Metrics
-        self.metrics = {}
-        self.qc(pol_degree=pol_degree)
+        self.metric_std = bins_groupby.agg(pl.col(self.avo_column).std(ddof=0))[self.avo_column].mean()
+        self.metric_corr = bins_df.select(pl.corr(self.avo_column, "bins_approx")).item()
+
+        self.stats_df = stats_df[["bin", self.avo_column]].to_pandas()
+        # Sort bins_df before converting to avoid sorting in `plot`` method
+        self.bins_df = bins_df.sort("bin").to_pandas()
+
+    def _calculate_bin_polynomial(self, bins_df, pol_degree=3):
+        not_nan_df = bins_df.filter(pl.col(self.avo_column).is_not_null())
+
+        poly = np.polyfit(not_nan_df["bin"], not_nan_df[self.avo_column], deg=pol_degree)
+        bins_df = bins_df.with_columns(
+            pl.when(pl.col(self.avo_column).is_null())
+              .then(None)
+              .otherwise(pl.col("bin").apply(lambda bins: np.polyval(poly, bins)))
+              .alias("bins_approx")
+        )
+        return bins_df
 
     @classmethod
     def from_survey(cls, survey, avo_column, bin_size, indexed_by=None, name=None, pol_degree=3):
@@ -36,21 +73,6 @@ class AmplitudeOffsetDistribution:
         name = name if name is not None else survey.name
         return cls(headers=survey.headers, avo_column=avo_column, bin_size=bin_size, indexed_by=indexed_by, name=name,
                    pol_degree=pol_degree)
-
-    def qc(self, pol_degree=3):
-        if "std" not in self.metrics:
-            self.metrics["std"] = self.stats_df.groupby("bin")[self.avo_column].apply(np.nanstd).mean()
-        self.metrics["corr"] = self._calculate_correlation_with_polynomial(pol_degree=pol_degree)
-
-    def _calculate_correlation_with_polynomial(self, pol_degree):
-        mask = ~self.bins_df[self.avo_column].isna()
-        not_nan_bins = self.bins_df[mask]
-        poly = np.polyfit(not_nan_bins["bin"], not_nan_bins[self.avo_column], deg=pol_degree)
-
-        bins_approx = np.full(len(mask), np.nan)
-        bins_approx[mask] = np.polyval(poly, not_nan_bins["bin"])
-        self.bins_df["bins_approx"] = bins_approx
-        return np.corrcoef(not_nan_bins[self.avo_column], bins_approx[mask])[0][1]
 
     def plot(self, show_qc=False, show_poly=False, title=None, figsize=(15, 7), dot_size=3, avg_size=50, dpi=100,
              save_to=None):
@@ -81,10 +103,8 @@ class AmplitudeOffsetDistribution:
 
     def _finalize_plot(self, fig, ax, show_qc, title, save_to, dpi):
         if show_qc:
-            title = "" if title is None else title
-            for name, value in self.metrics.items():
-                sep = "\n" if title else ""
-                title = title + sep + f"{name} : {value:.4}"
+            title = "" if title is None else title + "\n"
+            title += f"std: {self.metric_std:.4}\ncorr: {self.metric_corr:.4}"
         ax.set_xlabel('Offset')
         ax.set_ylabel('Amplitude')
         ax.set_title(title)
