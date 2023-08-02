@@ -72,7 +72,7 @@ class TravelTimeDataset:
 
         split_indices = np.cumsum([survey.n_traces for survey in self.survey_list[:-1]])
         pred_traveltimes = np.split(self.pred_traveltimes, split_indices)
-        data_iterator = zip(align_args(self.survey_list, pred_traveltimes, predicted_first_breaks_header))
+        data_iterator = zip(*align_args(self.survey_list, pred_traveltimes, predicted_first_breaks_header))
         for survey, traveltimes, header in data_iterator:
             survey[header] = traveltimes
 

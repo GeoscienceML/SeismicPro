@@ -515,8 +515,7 @@ class LayeredModel:
 
         self.interpolate_unused_points(dataset)
 
-    def predict(self, dataset, batch_size=1000000, bar=True, store_to_survey=True,
-                predicted_first_breaks_header="PredictedFirstBreak"):
+    def predict(self, dataset, batch_size=1000000, bar=True, predicted_first_breaks_header=None):
         loader = dataset.create_predict_loader(batch_size=batch_size, device=self.device, bar=bar)
         with torch.no_grad():
             pred_traveltimes = [(self._estimate_traveltimes(*params) - traveltime_corrections).cpu()
@@ -524,8 +523,8 @@ class LayeredModel:
         pred_traveltimes = torch.cat(pred_traveltimes).numpy()
         dataset.pred_traveltimes = pred_traveltimes
 
-        if store_to_survey:
-            dataset.store_predictions_to_survey(predicted_first_breaks_header=predicted_first_breaks_header)
+        if predicted_first_breaks_header is not None:
+            dataset.store_predictions_to_survey(predicted_first_breaks_header)
         return dataset
 
     # Statics calculation

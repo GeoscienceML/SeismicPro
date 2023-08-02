@@ -146,18 +146,20 @@ class TomoModel:
         return tt_pred
 
     def estimate_traveltimes_batch(self, batch, spatial_margin=3, crop_vertically=False, vertical_margin=1, n_sweeps=2,
-                                   max_n_steps=None, n_workers=None, bar=True):
+                                   max_n_steps=None, n_workers=None, desc=None, bar=True):
         if n_workers is None:
             n_workers = os.cpu_count()
         n_workers = min(len(batch), n_workers)
 
         futures = []
-        with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            for source, receivers in tqdm(batch, desc="Gathers processed", disable=not bar):
-                future = pool.submit(self.estimate_traveltimes, source, receivers, spatial_margin=spatial_margin,
-                                     crop_vertically=crop_vertically, vertical_margin=vertical_margin,
-                                     n_sweeps=n_sweeps, max_n_steps=max_n_steps)
-                futures.append(future)
+        with tqdm(total=len(batch), desc=desc, disable=not bar) as pbar:
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                for source, receivers in batch:
+                    future = pool.submit(self.estimate_traveltimes, source, receivers, spatial_margin=spatial_margin,
+                                        crop_vertically=crop_vertically, vertical_margin=vertical_margin,
+                                        n_sweeps=n_sweeps, max_n_steps=max_n_steps)
+                    future.add_done_callback(lambda _: pbar.update())
+                    futures.append(future)
         return [future.result() for future in futures]
 
     # Dataset generation
@@ -171,19 +173,19 @@ class TomoModel:
         pass
 
     def predict(self, dataset, spatial_margin=3, n_sweeps=2, max_n_steps=None, n_workers=None, bar=True,
-                store_to_survey=True, predicted_first_breaks_header="PredictedFirstBreak"):
+                predicted_first_breaks_header=None):
         locations = [gather_data[:2] for gather_data in dataset.gather_data]
         dataset_pos = [gather_data[-1] for gather_data in dataset.gather_data]
         tt_list = self.estimate_traveltimes_batch(locations, spatial_margin=spatial_margin, crop_vertically=False,
                                                   n_sweeps=n_sweeps, max_n_steps=max_n_steps, n_workers=n_workers,
-                                                  bar=bar)
+                                                  desc="Gathers processed", bar=bar)
         pred_traveltimes = np.empty_like(dataset.true_traveltimes)
         pred_traveltimes[np.concatenate(dataset_pos)] = np.concatenate(tt_list)
         pred_traveltimes -= dataset.traveltime_corrections
         dataset.pred_traveltimes = pred_traveltimes
 
-        if store_to_survey:
-            dataset.store_predictions_to_survey(predicted_first_breaks_header=predicted_first_breaks_header)
+        if predicted_first_breaks_header is not None:
+            dataset.store_predictions_to_survey(predicted_first_breaks_header)
         return dataset
 
     # Model visualization
