@@ -521,14 +521,15 @@ class LayeredModel:
         with torch.no_grad():
             pred_traveltimes = [(self._estimate_traveltimes(*params) - traveltime_corrections).cpu()
                                 for *params, traveltime_corrections in loader]
-        pred_traveltimes = torch.cat(pred_traveltimes)
+        pred_traveltimes = torch.cat(pred_traveltimes).numpy()
         dataset.pred_traveltimes = pred_traveltimes
 
         if store_to_survey:
             split_indices = np.cumsum([survey.n_traces for survey in dataset.survey_list[:-1]])
-            pred_traveltimes = np.split(pred_traveltimes.numpy(), split_indices)
-            for survey, traveltimes in zip(dataset.survey_list, pred_traveltimes):
-                survey[predicted_first_breaks_header] = traveltimes
+            pred_traveltimes = np.split(pred_traveltimes, split_indices)
+            data_iterator = zip(align_args(dataset.survey_list, pred_traveltimes, predicted_first_breaks_header))
+            for survey, traveltimes, header in data_iterator:
+                survey[header] = traveltimes
         return dataset
 
     # Statics calculation
