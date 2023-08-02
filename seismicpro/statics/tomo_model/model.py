@@ -1,14 +1,17 @@
+import os
 import math
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
 import numpy as np
 from numba import njit, prange
+from tqdm.auto import tqdm
 from fteikpy import Eikonal3D
 
 from .raytracing import describe_rays
 from .profile_plot import ProfilePlot
 from ...utils import IDWInterpolator
+from ...const import HDR_FIRST_BREAK
 
 
 class TomoModel:
@@ -73,7 +76,8 @@ class TomoModel:
     # Traveltime estimation
 
     @staticmethod
-    def crop_model(source, receivers, velocities, origin, cell_size, spatial_margin=3):
+    def crop_model(source, receivers, velocities, origin, cell_size, spatial_margin=3, crop_vertically=False,
+                   vertical_margin=1):
         min_coords = np.minimum(source[1:], receivers[:, 1:].min(axis=0))
         ix_min, iy_min = (min_coords - origin[1:]) / cell_size[1:]
         ix_min = max(math.floor(ix_min) - spatial_margin, 0)
@@ -84,15 +88,29 @@ class TomoModel:
         ix_max = math.floor(ix_max) + spatial_margin
         iy_max = math.floor(iy_max) + spatial_margin
 
-        cropped_origin = (origin[0], origin[1] + ix_min * cell_size[1], origin[2] + iy_min * cell_size[2])
-        return Eikonal3D(velocities[:, ix_min:ix_max+1, iy_min:iy_max+1], cell_size, cropped_origin)
+        if crop_vertically:
+            min_elevation = min(source[0], receivers[:, 0].min())
+            iz_min = max(math.floor((min_elevation - origin[0]) / cell_size[0]) - vertical_margin, 0)
+            max_elevation = max(source[0], receivers[:, 0].max())
+            iz_max = math.floor((max_elevation - origin[0]) / cell_size[0]) + vertical_margin
+        else:
+            iz_min = 0
+            iz_max = velocities.shape[0] - 1
 
-    def describe_rays(self, source, receivers, spatial_margin=3, n_sweeps=2, max_n_steps=None):
+        origin_z = origin[0] + iz_min * cell_size[0]
+        origin_x = origin[1] + ix_min * cell_size[1]
+        origin_y = origin[2] + iy_min * cell_size[2]
+        cropped_origin = (origin_z, origin_x, origin_y)
+        return Eikonal3D(velocities[iz_min:iz_max+1, ix_min:ix_max+1, iy_min:iy_max+1], cell_size, cropped_origin)
+
+    def describe_rays(self, source, receivers, spatial_margin=3, crop_vertically=False, vertical_margin=1, n_sweeps=2,
+                      max_n_steps=None):
         velocities = self.velocities_tensor.detach().numpy()
         origin = np.require(self.grid.origin, dtype=np.float64)
         cell_size = np.require(self.grid.cell_size, dtype=np.float64)
 
-        cropped_grid = self.crop_model(source, receivers, velocities, origin, cell_size, spatial_margin=spatial_margin)
+        cropped_grid = self.crop_model(source, receivers, velocities, origin, cell_size, spatial_margin=spatial_margin,
+                                       crop_vertically=crop_vertically, vertical_margin=vertical_margin)
         tt_grid = cropped_grid.solve(source, nsweep=n_sweeps, return_gradient=True)
         z_grad, x_grad, y_grad = tt_grid.gradient
 
@@ -105,9 +123,11 @@ class TomoModel:
         return tt_grid, *ray_params
 
     @torch.no_grad()
-    def estimate_traveltimes(self, source, receivers, spatial_margin=3, n_sweeps=2, max_n_steps=None):
-        ray_params = self.describe_rays(source, receivers, spatial_margin=spatial_margin, n_sweeps=n_sweeps,
-                                        max_n_steps=max_n_steps)
+    def estimate_traveltimes(self, source, receivers, spatial_margin=3, crop_vertically=False, vertical_margin=1,
+                             n_sweeps=2, max_n_steps=None):
+        ray_params = self.describe_rays(source, receivers, spatial_margin=spatial_margin,
+                                        crop_vertically=crop_vertically, vertical_margin=vertical_margin,
+                                        n_sweeps=n_sweeps, max_n_steps=max_n_steps)
         tt_grid, _, _, succeeded, trace_indices, cell_indices, cell_passes = ray_params
 
         n_succeeded = succeeded.sum()
@@ -125,15 +145,46 @@ class TomoModel:
         tt_pred[succeeded] = tt_pred_tensor.detach().numpy()
         return tt_pred
 
-    def estimate_traveltimes_batch(self, batch, spatial_margin=3, n_sweeps=2, max_n_steps=None):
+    def estimate_traveltimes_batch(self, batch, spatial_margin=3, crop_vertically=False, vertical_margin=1, n_sweeps=2,
+                                   max_n_steps=None, n_workers=None, bar=True):
+        if n_workers is None:
+            n_workers = os.cpu_count()
+        n_workers = min(len(batch), n_workers)
+
         futures = []
-        n_workers = min(80, len(batch))
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            for source, receivers in batch:
+            for source, receivers in tqdm(batch, desc="Gathers processed", disable=not bar):
                 future = pool.submit(self.estimate_traveltimes, source, receivers, spatial_margin=spatial_margin,
+                                     crop_vertically=crop_vertically, vertical_margin=vertical_margin,
                                      n_sweeps=n_sweeps, max_n_steps=max_n_steps)
                 futures.append(future)
         return [future.result() for future in futures]
+
+    # Dataset generation
+
+    def create_dataset(self, survey=None, first_breaks_header=HDR_FIRST_BREAK, uphole_correction_method="auto"):
+        return self.grid.create_dataset(survey, first_breaks_header, uphole_correction_method)
+
+    # Model fitting and inference
+
+    def fit(self, dataset, batch_size=250000, n_epochs=5, bar=True):
+        pass
+
+    def predict(self, dataset, spatial_margin=3, n_sweeps=2, max_n_steps=None, n_workers=None, bar=True,
+                store_to_survey=True, predicted_first_breaks_header="PredictedFirstBreak"):
+        locations = [gather_data[:2] for gather_data in dataset.gather_data]
+        dataset_pos = [gather_data[-1] for gather_data in dataset.gather_data]
+        tt_list = self.estimate_traveltimes_batch(locations, spatial_margin=spatial_margin, crop_vertically=False,
+                                                  n_sweeps=n_sweeps, max_n_steps=max_n_steps, n_workers=n_workers,
+                                                  bar=bar)
+        pred_traveltimes = np.empty_like(dataset.true_traveltimes)
+        pred_traveltimes[np.concatenate(dataset_pos)] = np.concatenate(tt_list)
+        pred_traveltimes -= dataset.traveltime_corrections
+        dataset.pred_traveltimes = pred_traveltimes
+
+        if store_to_survey:
+            dataset.store_predictions_to_survey(predicted_first_breaks_header=predicted_first_breaks_header)
+        return dataset
 
     # Model visualization
 

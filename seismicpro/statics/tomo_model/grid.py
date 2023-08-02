@@ -3,6 +3,8 @@ import math
 import numpy as np
 import polars as pl
 
+from .dataset import TomoModelTravelTimeDataset
+from ...const import HDR_FIRST_BREAK
 from ...utils import to_list, IDWInterpolator
 
 
@@ -79,3 +81,12 @@ class Grid3D:
         shape = (nz, nx, ny)
         cell_size = (dz, dx, dy)
         return cls(origin, shape, cell_size, survey=survey)
+
+    # Dataset generation
+
+    def create_dataset(self, survey=None, first_breaks_header=HDR_FIRST_BREAK, uphole_correction_method="auto"):
+        if survey is None:
+            if not self.has_survey:
+                raise ValueError("A survey to create a dataset must be passed")
+            survey = self.survey
+        return TomoModelTravelTimeDataset(survey, self, first_breaks_header, uphole_correction_method)

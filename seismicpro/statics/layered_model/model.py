@@ -525,11 +525,7 @@ class LayeredModel:
         dataset.pred_traveltimes = pred_traveltimes
 
         if store_to_survey:
-            split_indices = np.cumsum([survey.n_traces for survey in dataset.survey_list[:-1]])
-            pred_traveltimes = np.split(pred_traveltimes, split_indices)
-            data_iterator = zip(align_args(dataset.survey_list, pred_traveltimes, predicted_first_breaks_header))
-            for survey, traveltimes, header in data_iterator:
-                survey[header] = traveltimes
+            dataset.store_predictions_to_survey(predicted_first_breaks_header=predicted_first_breaks_header)
         return dataset
 
     # Statics calculation

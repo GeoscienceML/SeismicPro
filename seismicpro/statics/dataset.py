@@ -66,13 +66,15 @@ class TravelTimeDataset:
         survey_list_data = [seq[0] if len(survey_list) == 1 else np.concatenate(seq) for seq in survey_list_data]
         return survey_list_data
 
-    # Loader creation
+    def store_predictions_to_survey(self, predicted_first_breaks_header="PredictedFirstBreak"):
+        if not self.has_predictions:
+            raise ValueError
 
-    def create_train_loader(self, batch_size, n_epochs, shuffle=True, drop_last=True, bar=True):
-        raise NotImplementedError
-
-    def create_predict_loader(self, batch_size, bar=True):
-        raise NotImplementedError
+        split_indices = np.cumsum([survey.n_traces for survey in self.survey_list[:-1]])
+        pred_traveltimes = np.split(self.pred_traveltimes, split_indices)
+        data_iterator = zip(align_args(self.survey_list, pred_traveltimes, predicted_first_breaks_header))
+        for survey, traveltimes, header in data_iterator:
+            survey[header] = traveltimes
 
     # Evaluation of predictions
 
