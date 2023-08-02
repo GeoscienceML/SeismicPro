@@ -216,27 +216,25 @@ class TomoModel:
         source_coords = statics[["SourceSurfaceElevation", "SourceX", "SourceY"]].to_numpy()
         if uphole_correction_method == "time":
             locations = [(coord, np.array([[datum, coord[1], coord[2]]])) for coord in source_coords]
-            statics = self.estimate_traveltimes_batch(locations, spatial_margin=3, crop_vertically=True,
-                                                      vertical_margin=1, n_sweeps=2, max_n_steps=None, n_workers=None,
-                                                      desc="Common source gathers processed", bar=True)
-            surface_statics = np.concatenate(statics)
-            statics["SurfaceStatics"] = surface_statics
+            st = self.estimate_traveltimes_batch(locations, spatial_margin=3, crop_vertically=True,
+                                                 vertical_margin=1, n_sweeps=2, max_n_steps=None, n_workers=None,
+                                                 desc="Common source gathers processed", bar=True)
+            statics["SurfaceStatics"] = np.concatenate(st)
             statics["Statics"] = statics["SurfaceStatics"] - statics["SourceUpholeTime"]
         elif uphole_correction_method == "depth":
             locations = [(np.array([datum, coord[1], coord[2]]),
                           np.stack([coord, [coord[0] - depth, coord[1], coord[2]]]))
                          for coord, depth in zip(source_coords, statics["SourceDepth"].to_numpy())]
-            statics = self.estimate_traveltimes_batch(locations, spatial_margin=3, crop_vertically=True,
-                                                      vertical_margin=1, n_sweeps=2, max_n_steps=None, n_workers=None,
-                                                      desc="Common source gathers processed", bar=True)
-            statics[["SurfaceStatics", "Statics"]] = np.stack(statics)
+            st = self.estimate_traveltimes_batch(locations, spatial_margin=3, crop_vertically=True,
+                                                 vertical_margin=1, n_sweeps=2, max_n_steps=None, n_workers=None,
+                                                 desc="Common source gathers processed", bar=True)
+            statics[["SurfaceStatics", "Statics"]] = np.stack(st)
         else:
             locations = [(coord, np.array([[datum, coord[1], coord[2]]])) for coord in source_coords]
-            statics = self.estimate_traveltimes_batch(locations, spatial_margin=3, crop_vertically=True,
-                                                      vertical_margin=1, n_sweeps=2, max_n_steps=None, n_workers=None,
-                                                      desc="Common source gathers processed", bar=True)
-            surface_statics = np.concatenate(statics)
-            statics["SurfaceStatics"] = surface_statics
+            st = self.estimate_traveltimes_batch(locations, spatial_margin=3, crop_vertically=True,
+                                                 vertical_margin=1, n_sweeps=2, max_n_steps=None, n_workers=None,
+                                                 desc="Common source gathers processed", bar=True)
+            statics["SurfaceStatics"] = np.concatenate(st)
             statics["Statics"] = statics["SurfaceStatics"]
         return statics
 
@@ -255,10 +253,10 @@ class TomoModel:
 
         receiver_coords = statics[["ReceiverGroupElevation", "GroupX", "GroupY"]].to_numpy()
         locations = [(coord, np.array([[datum, coord[1], coord[2]]])) for coord in receiver_coords]
-        statics = self.estimate_traveltimes_batch(locations, spatial_margin=3, crop_vertically=True, vertical_margin=1,
-                                                  n_sweeps=2, max_n_steps=None, n_workers=None,
-                                                  desc="Common receiver gathers processed", bar=True)
-        statics["Statics"] = np.concatenate(statics)
+        st = self.estimate_traveltimes_batch(locations, spatial_margin=3, crop_vertically=True, vertical_margin=1,
+                                             n_sweeps=2, max_n_steps=None, n_workers=None,
+                                             desc="Common receiver gathers processed", bar=True)
+        statics["Statics"] = np.concatenate(st)
         return statics
 
     def calculate_statics(self, survey=None, uphole_correction_method="auto", source_id_cols=None,
