@@ -1,4 +1,4 @@
-"""AVO"""
+"""Implements AmplitudeOffsetDistribution class."""
 
 import numpy as np
 import polars as pl
@@ -9,33 +9,33 @@ from ..utils import to_list, save_figure
 
 
 class AmplitudeOffsetDistribution:
+
     def __init__(self, headers, avo_column, bin_size, indexed_by, name=None, pol_degree=3):
         if "offset" not in headers:
             raise ValueError("Missing offset header")
         self.avo_column = avo_column
-        self.name = name
+        self.name = "Amplitude vs Offset Distribution" if name is None else name
 
         headers = headers.copy(deep=False)
         headers.reset_index(inplace=True)
-        headers['offset'] = headers['offset'].abs()
+        headers["offset"] = headers["offset"].abs()  # Avoid negative offsets
 
         headers = pl.from_pandas(headers, rechunk=False)
-        # Avoid negative offsets
         if isinstance(bin_size, (int, np.integer)):
             bin_bounds = np.arange(0, headers["offset"].max()+bin_size, bin_size)
         else:
             bin_bounds = np.cumsum([0, *bin_size])
 
-        # Subtract 1 to start at offset 0 instead of `bin_size`
+        # Find bin index for each trace in headers and subtract index by 1 to start at offset 0 instead of `bin_size`.
         headers = headers.with_columns(
             (pl.lit(bin_bounds)
-               .search_sorted(pl.col('offset'), side='right') - 1)
+               .search_sorted(pl.col("offset"), side="right") - 1)
                .clip(0, len(bin_bounds))
-               .alias('bin_ix')
+               .alias("bin_ix")
         )
 
-        # Change bin indices to actual offset values on the bounds
-        headers = headers.with_columns(pl.lit(bin_bounds).take(pl.col('bin_ix')).alias('bin'))
+        # Change bin indices to the actual offset values
+        headers = headers.with_columns(pl.lit(bin_bounds).take(pl.col("bin_ix")).alias("bin"))
 
         # Find for each gather mean AVO value in each bin
         stats_df = headers.groupby([*indexed_by, "bin"]).agg(pl.col(avo_column).mean())
@@ -77,14 +77,16 @@ class AmplitudeOffsetDistribution:
     def plot(self, show_qc=False, show_poly=False, title=None, figsize=(15, 7), dot_size=3, avg_size=50, dpi=100,
              save_to=None):
         fig, ax = plt.subplots(figsize=figsize)
-        self.stats_df.plot(x='bin', y=self.avo_column, kind='scatter', ax=ax, s=dot_size, label="Gather AVO in bin")
-        self.bins_df.plot(x='bin', y=self.avo_column, kind='scatter', ax=ax, s=avg_size, marker='v', color='r',
+        self.stats_df.plot(x="bin", y=self.avo_column, kind="scatter", ax=ax, s=dot_size, label="Gather AVO in bin")
+        self.bins_df.plot(x="bin", y=self.avo_column, kind="scatter", ax=ax, s=avg_size, marker='v', color='r',
                           grid=True, label="Mean AVO in bin")
 
         if show_poly:
-            ax.plot(self.bins_df["bin"], self.bins_df["bins_approx"], '--', c='g', zorder=3,
+            ax.plot(self.bins_df["bin"], self.bins_df["bins_approx"], "--", c='g', zorder=3,
                     label="Mean AVO approximation")
-        self._finalize_plot(fig, ax, show_qc, title, save_to, dpi)
+        title = self.name if title is None else title
+        title += f"\nstd: {self.metric_std:.4}\ncorr: {self.metric_corr:.4}" if show_qc else ""
+        self._finalize_plot(fig, ax, title, save_to, dpi)
 
     def plot_std(self, *args, align=False, title=None, figsize=(15, 7), dpi=100, save_to=None):
         avos = [self, *args]
@@ -98,15 +100,12 @@ class AmplitudeOffsetDistribution:
                 if align:
                     stats = stats.copy(deep=False)
                     stats[avo.avo_column] = stats[avo.avo_column] + global_mean - np.nanmean(stats[avo.avo_column])
-                sns.lineplot(data=stats, x="bin", y=avo.avo_column, errorbar='sd', ax=ax, label=avo.name)
-            self._finalize_plot(fig, ax, False, title, save_to, dpi)
+                sns.lineplot(data=stats, x="bin", y=avo.avo_column, errorbar="sd", ax=ax, label=avo.name)
+            self._finalize_plot(fig, ax, title, save_to, dpi)
 
-    def _finalize_plot(self, fig, ax, show_qc, title, save_to, dpi):
-        if show_qc:
-            title = "" if title is None else title + "\n"
-            title += f"std: {self.metric_std:.4}\ncorr: {self.metric_corr:.4}"
-        ax.set_xlabel('Offset')
-        ax.set_ylabel('Amplitude')
+    def _finalize_plot(self, fig, ax, title, save_to, dpi):
+        ax.set_xlabel("Offset")
+        ax.set_ylabel("Amplitude")
         ax.set_title(title)
         ax.legend()
         if save_to is not None:
