@@ -250,3 +250,10 @@ def test_gather_get_central_gather(segy_path):
 def test_gather_stack(gather):
     """test_gather_stack"""
     gather.stack()
+
+def test_apply_undo_agc(gather):
+    """test_apply_undo_agc"""
+    gather_copy = gather.copy()
+    gather, coefs = gather.apply_agc(return_coefs=True)
+    gather = gather.undo_agc(coefs)
+    assert_gathers_equal(gather_copy, gather)

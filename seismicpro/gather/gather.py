@@ -1022,7 +1022,7 @@ class Gather(TraceContainer, SamplesContainer):
         self.headers = self.headers.iloc[order]
         return self
 
-    @batch_method(target="for")
+    @batch_method(target="threads")
     def get_central_gather(self):
         """Get a central CDP gather from a supergather.
 
@@ -1200,8 +1200,7 @@ class Gather(TraceContainer, SamplesContainer):
         self.samples = new_samples
         return self
 
-    @batch_method(target="threads")
-    def apply_agc(self, window_size=250, mode='rms'):
+    def apply_agc(self, window_size=250, mode='rms', return_coefs=False):
         """Calculate instantaneous or RMS amplitude AGC coefficients and apply them to gather data.
 
         Parameters
@@ -1212,6 +1211,8 @@ class Gather(TraceContainer, SamplesContainer):
             Mode for AGC: if 'rms', root mean squared value of non-zero amplitudes in the given window
             is used as scaling coefficient (RMS amplitude AGC), if 'abs' - mean of absolute non-zero
             amplitudes (instantaneous AGC).
+        return_coefs : bool, optional, defaults to False
+            Whether to return a `Gather` with AGC coefficients in `data` attribute.
 
         Raises
         ------
@@ -1223,6 +1224,8 @@ class Gather(TraceContainer, SamplesContainer):
         -------
         self : Gather
             Gather with AGC applied to its data.
+        coefs_gather : Gather, optional
+            Gather with AGC coefficients in `data` attribute. Returned only if `return_coefs` was set to `True`.
         """
         # Cast window from ms to samples
         window_size_samples = int(window_size // self.sample_interval) + 1
@@ -1232,7 +1235,30 @@ class Gather(TraceContainer, SamplesContainer):
         if (window_size_samples < 3) or (window_size_samples > self.n_samples):
             raise ValueError(f'window_size should be at least {2*self.sample_interval} milliseconds and '
                              f'{(self.n_samples-1)*self.sample_interval} at most, but {window_size} was given')
-        self.data = gain.apply_agc(data=self.data, window_size=window_size_samples, mode=mode)
+        # Avoid using str in funciton decorated with njit for performance reasons
+        use_rms_mode = mode == 'rms'
+        data, coefs = gain.apply_agc(data=self.data, window_size=window_size_samples, use_rms_mode=use_rms_mode)
+        self.data = data
+        if return_coefs:
+            coefs_gather = self.copy(ignore="data")
+            coefs_gather.data = coefs
+            return self, coefs_gather
+        return self
+
+    def undo_agc(self, coefs_gather):
+        """Undo previously applied AGC correction using precomputed AGC coefficients.
+
+        Parameters
+        ----------
+        coefs_gather : Gather
+            Gather with AGC coefficients in `data` attribute.
+
+        Returns
+        -------
+        self : Gather
+            Gather without AGC.
+        """
+        self.data = gain.undo_agc(data=self.data, coefs=coefs_gather.data)
         return self
 
     @batch_method(target="threads")
@@ -1261,7 +1287,7 @@ class Gather(TraceContainer, SamplesContainer):
         self.data = gain.apply_sdc(self.data, v_pow, velocity(self.times), t_pow, self.times)
         return self
 
-    @batch_method(target="for")
+    @batch_method(target="threads")
     def undo_sdc(self, velocity=None, v_pow=2, t_pow=1):
         """Calculate spherical divergence correction coefficients and use them to undo previously applied SDC.
 

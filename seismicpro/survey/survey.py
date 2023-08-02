@@ -11,12 +11,13 @@ import segyio
 import numpy as np
 import scipy as sp
 import pandas as pd
+import polars as pl
 from segfast import Loader
 from tqdm.auto import tqdm
 from scipy.interpolate import interp1d
 from sklearn.linear_model import LinearRegression
 
-from .headers_checks import validate_trace_headers, validate_source_headers, validate_receiver_headers
+from .headers_checks import validate_headers, validate_source_headers, validate_receiver_headers
 from .metrics import (SurveyAttribute, TracewiseMetric, BaseWindowRMSMetric, MetricsRatio, DeadTrace,
                       DEFAULT_TRACEWISE_METRICS)
 from .plot_geometry import SurveyGeometryPlot
@@ -147,6 +148,10 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         Trace headers that uniquely identify a seismic source.
     receiver_id_cols : str or list of str or None
         Trace headers that uniquely identify a receiver.
+    n_sources : int or None
+        The number of sources in the survey. `None` if `source_id_cols` are undefined.
+    n_receivers : int or None
+        The number of receivers in the survey. `None` if `receiver_id_cols` are undefined.
     loader : segfast.SegyioLoader or segfast.MemmapLoader
         SEG-Y file loader. Its type depends on the `engine` passed during survey instantiation.
     has_stats : bool
@@ -257,20 +262,22 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         self.delay = None
         self.set_limits(limits)
 
-        # Load trace headers and sort them by the required index in order to optimize further subsampling and merging.
-        # Sorting preserves trace order from the file within each gather.
+        # Load trace headers and check them for consistency
         pbar = partial(tqdm, desc="Trace headers loaded") if bar else False
         headers = self.loader.load_headers(headers_to_load, reconstruct_tsf=True, sort_columns=True,
                                            chunk_size=chunk_size, max_workers=n_workers, pbar=pbar)
+        if validate:
+            validate_headers(pl.from_pandas(headers, rechunk=False), source_id_cols, receiver_id_cols)
+
+        # Sort headers by the required index in order to optimize further subsampling and merging.
+        # Sorting preserves trace order from the file within each gather.
         headers.set_index(header_index, inplace=True)
         headers.sort_index(kind="stable", inplace=True)
         self._headers = None
         self._indexer = None
+        self.n_sources = None
+        self.n_receivers = None
         self.headers = headers
-
-        # Validate trace headers for consistency
-        if validate:
-            self.validate_headers()
 
         # Define all stats-related attributes
         self.has_stats = False
@@ -318,20 +325,6 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         return len(self.file_samples)
 
     @property
-    def n_sources(self):
-        """int: The number of sources."""
-        if self.source_id_cols is None:
-            return None
-        return len(self.get_headers(self.source_id_cols).drop_duplicates())
-
-    @property
-    def n_receivers(self):
-        """int: The number of receivers."""
-        if self.receiver_id_cols is None:
-            return None
-        return len(self.get_headers(self.receiver_id_cols).drop_duplicates())
-
-    @property
     def is_uphole(self):
         """bool or None: Whether the survey is uphole. `None` if uphole-related headers are not loaded."""
         has_uphole_times = "SourceUpholeTime" in self.available_headers
@@ -370,6 +363,14 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         GatherContainer.headers.fset(self, headers)
         htp_dtype = np.int32 if len(headers) < np.iinfo(np.int32).max else np.int64
         self.headers[HDR_TRACE_POS] = np.arange(self.n_traces, dtype=htp_dtype)
+
+        # Update the number of sources and receivers
+        if self.source_id_cols is not None or self.receiver_id_cols is not None:
+            polars_headers = self.get_polars_headers()
+            if self.source_id_cols is not None:
+                self.n_sources = len(polars_headers.select(self.source_id_cols).unique())
+            if self.receiver_id_cols is not None:
+                self.n_receivers = len(polars_headers.select(self.receiver_id_cols).unique())
 
     def __getstate__(self):
         """Create pickling state of a survey from its `__dict__`. Don't pickle `headers` and `indexer` if
@@ -412,19 +413,17 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         """
 
         if self.source_id_cols is not None:
-            n_sources = self.n_sources  # Run possibly time-consuming calculation once
             msg += f"""
         Source ID headers:         {", ".join(to_list(self.source_id_cols))}
-        Number of sources:         {n_sources}
-        Mean source fold:          {int(self.n_traces / n_sources)}
+        Number of sources:         {self.n_sources}
+        Mean source fold:          {int(self.n_traces / self.n_sources)}
         """
 
         if self.receiver_id_cols is not None:
-            n_receivers = self.n_receivers  # Run possibly time-consuming calculation once
             msg += f"""
         Receiver ID headers:       {", ".join(to_list(self.receiver_id_cols))}
-        Number of receivers:       {n_receivers}
-        Mean receiver fold:        {int(self.n_traces / n_receivers)}
+        Number of receivers:       {self.n_receivers}
+        Mean receiver fold:        {int(self.n_traces / self.n_receivers)}
         """
 
         if self.has_inferred_geometry:
@@ -451,28 +450,32 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         trace statistics if they were calculated."""
         print(self)
 
+    def get_polars_headers(self):
+        """Return survey trace headers as a `polars.DataFrame`. The index is transformed into individual columns."""
+        return pl.from_pandas(self.headers, rechunk=False, include_index=True)
+
     def set_source_id_cols(self, cols, validate=True):
         """Set new trace headers that uniquely identify a seismic source and optionally validate consistency of
         source-related trace headers by checking that each source has unique coordinates, surface elevation, uphole
         time and depth."""
         if set(to_list(cols)) - self.available_headers:
             raise ValueError("Required headers were not loaded")
+        polars_headers = self.get_polars_headers()
         if validate:
-            headers = self.headers.copy(deep=False)
-            headers.reset_index(inplace=True)
-            validate_source_headers(headers, cols)
+            validate_source_headers(polars_headers, cols)
         self.source_id_cols = cols
+        self.n_sources = len(polars_headers.select(cols).unique())
 
     def set_receiver_id_cols(self, cols, validate=True):
         """Set new trace headers that uniquely identify a receiver and optionally validate consistency of
         receiver-related trace headers by checking that each receiver has unique coordinates and surface elevation."""
         if set(to_list(cols)) - self.available_headers:
             raise ValueError("Required headers were not loaded")
+        polars_headers = self.get_polars_headers()
         if validate:
-            headers = self.headers.copy(deep=False)
-            headers.reset_index(inplace=True)
-            validate_receiver_headers(headers, cols)
+            validate_receiver_headers(polars_headers, cols)
         self.receiver_id_cols = cols
+        self.n_receivers = len(polars_headers.select(cols).unique())
 
     def validate_headers(self, offset_atol=10, cdp_atol=10, elevation_atol=5, elevation_radius=50):
         """Check trace headers for consistency.
@@ -513,12 +516,9 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         elevation_radius : int, optional, defaults to 50
             Radius of the neighborhood to estimate mean surface elevation.
         """
-        headers = self.headers.copy(deep=False)
-        headers.reset_index(inplace=True)
-        validate_trace_headers(headers, offset_atol=offset_atol, cdp_atol=cdp_atol, elevation_atol=elevation_atol,
-                               elevation_radius=elevation_radius)
-        validate_source_headers(headers, self.source_id_cols)
-        validate_receiver_headers(headers, self.receiver_id_cols)
+        validate_headers(self.get_polars_headers(), self.source_id_cols, self.receiver_id_cols,
+                         offset_atol=offset_atol, cdp_atol=cdp_atol, elevation_atol=elevation_atol,
+                         elevation_radius=elevation_radius)
 
     #------------------------------------------------------------------------#
     #                        Geometry-related methods                        #
@@ -534,8 +534,8 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         After the method is executed `has_inferred_binning` flag is set to `True` and all the calculated values can be
         obtained via corresponding attributes.
         """
-        # Find unique pairs of inlines and crosslines, drop_duplicates is way faster than np.unique
-        lines = self.get_headers(["INLINE_3D", "CROSSLINE_3D"]).drop_duplicates().to_numpy()
+        # Find unique pairs of inlines and crosslines
+        lines = pl.from_pandas(self.get_headers(["INLINE_3D", "CROSSLINE_3D"]), rechunk=False).unique().to_numpy()
 
         # Construct a binary mask of a field where True value is set for bins containing at least one trace
         # and False otherwise
@@ -569,12 +569,12 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         bins_cols = ["INLINE_3D", "CROSSLINE_3D"]
 
         # Construct a mapping from bins to their coordinates and back
-        bins_to_coords = self.get_headers(coords_cols + bins_cols)
-        bins_to_coords = bins_to_coords.groupby(bins_cols, sort=False, as_index=False).agg("mean")
-        bins_to_coords_reg = LinearRegression(copy_X=False, n_jobs=-1)
-        bins_to_coords_reg.fit(bins_to_coords[bins_cols].to_numpy(), bins_to_coords[coords_cols].to_numpy())
-        coords_to_bins_reg = LinearRegression(copy_X=False, n_jobs=-1)
-        coords_to_bins_reg.fit(bins_to_coords[coords_cols].to_numpy(), bins_to_coords[bins_cols].to_numpy())
+        bins_to_coords = pl.from_pandas(self.get_headers(coords_cols + bins_cols), rechunk=False)
+        bins_to_coords = bins_to_coords.groupby(bins_cols).agg(pl.col(coords_cols).mean()).to_pandas()
+        bins = bins_to_coords[bins_cols].to_numpy()
+        coords = bins_to_coords[coords_cols].to_numpy()
+        bins_to_coords_reg = LinearRegression(copy_X=False, n_jobs=-1).fit(bins, coords)
+        coords_to_bins_reg = LinearRegression(copy_X=False, n_jobs=-1).fit(coords, bins)
 
         # Compute geographic field contour
         geographic_contours = tuple(bins_to_coords_reg.predict(contour[:, 0])[:, None].astype(np.float32)
@@ -1194,6 +1194,7 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
             else:
                 raise KeyError("INLINE_3D and CROSSLINE_3D headers must be loaded")
 
+        new_index = super_line_cols if reindex else self.indexed_by
         self = maybe_copy(self, inplace, ignore="headers")  # pylint: disable=self-cls-assignment
         size = np.broadcast_to(size, 2)
         step = np.broadcast_to(step, 2)
@@ -1225,18 +1226,22 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         if centers.ndim != 2 or centers.shape[1] != 2:
             raise ValueError("Passed centers must have shape (n_supergathers, 2)")
 
+        polars_headers = self.get_polars_headers()
+
         # Construct a bridge table with mapping from supergather centers to their bins
         shifts_grid = np.meshgrid(np.arange(size[0]) - size[0] // 2, np.arange(size[1]) - size[1] // 2)
         shifts = np.stack(shifts_grid, axis=-1).reshape(-1, 2)
         bridge = np.column_stack([centers.repeat(size.prod(), axis=0), (centers[:, None] + shifts).reshape(-1, 2)])
-        bridge = pd.DataFrame(bridge, columns=super_line_cols+line_cols)
-        bridge.set_index(line_cols, inplace=True)
+        bridge_schema = [
+            ("SUPERGATHER_INLINE_3D", polars_headers.schema["INLINE_3D"]),
+            ("SUPERGATHER_CROSSLINE_3D", polars_headers.schema["CROSSLINE_3D"]),
+            ("INLINE_3D", polars_headers.schema["INLINE_3D"]),
+            ("CROSSLINE_3D", polars_headers.schema["CROSSLINE_3D"]),
+        ]
+        bridge = pl.from_numpy(bridge, schema=bridge_schema, orient="row")
 
-        headers = self.headers.join(bridge, on=line_cols, how="inner")
-        if reindex:
-            headers.reset_index(inplace=True)
-            headers.set_index(super_line_cols, inplace=True)
-            headers.sort_index(kind="stable", inplace=True)
+        headers = polars_headers.join(bridge, on=line_cols, how="inner").sort(new_index).to_pandas()
+        headers.set_index(new_index, inplace=True)
         self.headers = headers
         return self
 
@@ -1526,7 +1531,7 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
         A ratio of any two RMS metrics may be calculated by passing their names separated by `/` in `metric_names`,
         which allows displaying more complex metrics such as signal-to-noise ratio by gather. By default, RMS
         amplitudes are first calculated for each gather defined by `by` and then used to calculate the ratio. If
-        `tracewice` flag is set to `True` (see examples below), RMS amplitudes or ratios are first independently
+        `tracewise` flag is set to `True` (see examples below), RMS amplitudes or ratios are first independently
         calculated for each trace and then aggregated by gathers.
 
         Examples
@@ -1557,7 +1562,7 @@ class Survey(GatherContainer, SamplesContainer):  # pylint: disable=too-many-ins
 
         The map allows for interactive plotting: a gather type defined by `by` with a tracewise metric value on top of
         the gather plot will be displayed on click on the map. Depending on the metric, other arguments may be passed
-        to the metric plot. See `metric.plot()` for avalible arguments. In this example, the gather will be sorted by
+        to the metric plot. See `metric.plot()` for available arguments. In this example, the gather will be sorted by
         `offset` and the default threshold for the metric will be changed to 20:
         >>> qc_map.plot(interactive=True, threshold=20, sort_by="offset")
 

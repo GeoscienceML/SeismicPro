@@ -29,7 +29,7 @@ setup(
         'scipy>=1.7',
         'numba>=0.57',
         'pandas>=1.3',
-        'polars[pyarrow]>=0.17.5',
+        'polars[pyarrow]>=0.18.7',
         'scikit-learn>=0.23.2',
         'opencv_python>=4.5.1',
         'rustworkx>=0.12.1',
@@ -44,7 +44,7 @@ setup(
         'multiprocess>=0.70.11',
         'requests>=2.24',
         'psutil>=5.7.2',
-        'batchflow>=0.7.5',
+        'batchflow>=0.8.7',
         'tbb>=2021.7.1',
     ],
     classifiers=[
