@@ -8,6 +8,7 @@ from fteikpy import Eikonal3D
 
 from .raytracing import describe_rays
 from .profile_plot import ProfilePlot
+from ...utils import IDWInterpolator
 
 
 class TomoModel:
@@ -29,7 +30,7 @@ class TomoModel:
         return res_velocities
 
     @classmethod
-    def from_layered_model(cls, grid, layered_model):
+    def from_layered_model(cls, grid, layered_model, smoothing_radius=None):
         z_min, x_min, y_min = grid.origin
         nz, nx, ny = grid.shape
         dz, dx, dy = grid.cell_size
@@ -44,7 +45,14 @@ class TomoModel:
             1000 / layered_model.weathering_slowness_tensor.detach().cpu().numpy(),
         ])  # elevations and velocities should be monotonically increasing for searchsorted to properly work
         spatial_coords = np.array(np.meshgrid(x_cell_centers, y_cell_centers)).T.reshape(-1, 2)
-        spatial_params = layered_model.grid.interpolate(model_params, spatial_coords)
+
+        if smoothing_radius is None:
+            spatial_params = layered_model.grid.interpolate(model_params, spatial_coords)
+        else:
+            smoother = IDWInterpolator(layered_model.grid.coords, model_params, radius=smoothing_radius,
+                                       neighbors=layered_model.grid.n_interpolation_neighbors, dist_transform=0)
+            spatial_params = smoother(spatial_coords)
+
         elevations = spatial_params[:, :layered_model.n_refractors]
         velocities = spatial_params[:, layered_model.n_refractors:]
 
