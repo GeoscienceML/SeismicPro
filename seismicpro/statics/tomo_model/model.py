@@ -1,11 +1,13 @@
 import os
 import math
 import warnings
+import random
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
 import numpy as np
 import polars as pl
+import matplotlib.pyplot as plt
 from numba import njit, prange
 from tqdm.auto import tqdm
 from fteikpy import Eikonal3D
@@ -26,6 +28,9 @@ class TomoModel:
 
         self.grid = grid
         self.velocities_tensor = torch.tensor(velocities, dtype=torch.float32, requires_grad=True)
+        self.enforce_constraints()
+
+        self.loss_hist = []
 
     # IO
 
@@ -67,8 +72,6 @@ class TomoModel:
         spatial_velocities = cls.interp_velocities(elevations, velocities, z_cell_centers)
         velocity_grid = np.require(spatial_velocities.reshape((nx, ny, nz)).transpose((2, 0, 1)),
                                    dtype=np.float32, requirements="C")
-        if grid.has_survey:
-            velocity_grid[grid.air_mask] = 330
         return cls(grid, velocity_grid)
 
     @classmethod
@@ -167,6 +170,38 @@ class TomoModel:
                     futures.append(future)
         return [future.result() for future in futures]
 
+    def get_train_tensors(self, source, receivers, traveltimes, spatial_margin=3, n_sweeps=2, max_n_steps=None):
+        ray_params = self.describe_rays(source, receivers, spatial_margin=spatial_margin, crop_vertically=False,
+                                        n_sweeps=n_sweeps, max_n_steps=max_n_steps)
+        _, _, _, succeeded, trace_indices, cell_indices, cell_passes = ray_params
+        traveltimes = torch.from_numpy(traveltimes[succeeded])
+        trace_indices = torch.from_numpy(trace_indices)
+        cell_indices = torch.from_numpy(cell_indices)
+        cell_passes = torch.from_numpy(cell_passes)
+
+    def get_train_tensors_batch(self, batch, spatial_margin=3, n_sweeps=2, max_n_steps=None, n_workers=None):
+        if n_workers is None:
+            n_workers = os.cpu_count()
+        n_workers = min(len(batch), n_workers)
+
+        futures = []
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            for source, receivers, traveltimes in batch:
+                future = pool.submit(self.get_train_tensors, source, receivers, traveltimes,
+                                     spatial_margin=spatial_margin, n_sweeps=n_sweeps, max_n_steps=max_n_steps)
+                futures.append(future)
+        traveltimes, trace_indices, cell_indices, cell_passes = zip(*[future.result() for future in futures])
+
+        n_traces = [len(tt) for tt in traveltimes]
+        biases = np.cumsum([0] + n_traces[:-1])
+        trace_indices = [ti + b for ti, b in zip(trace_indices, biases)]
+
+        traveltimes = torch.cat(traveltimes)
+        trace_indices = torch.cat(trace_indices)
+        cell_indices = torch.cat(cell_indices)
+        cell_passes = torch.cat(cell_passes)
+        return traveltimes, trace_indices, cell_indices, cell_passes
+
     # Dataset generation
 
     def create_dataset(self, survey=None, first_breaks_header=HDR_FIRST_BREAK, uphole_correction_method="auto"):
@@ -174,8 +209,44 @@ class TomoModel:
 
     # Model fitting and inference
 
-    def fit(self, dataset, batch_size=250000, n_epochs=5, bar=True):
-        pass
+    @torch.no_grad()
+    def enforce_constraints(self):
+        self.velocities_tensor.clip_(min=330)
+        if self.grid.has_survey:
+            self.velocities_tensor[self.grid.air_mask] = 330
+
+    def fit(self, dataset, batch_size=320, n_epochs=5, lr=0.1, spatial_margin=3, n_sweeps=2, max_n_steps=None,
+            n_workers=None, bar=True):
+        batch_size = min(batch_size, dataset.n_train_gathers)
+        n_batched_per_epoch = dataset.n_train_gathers // batch_size
+        gather_data = dataset.gather_data[:]
+
+        optimizer = torch.optim.Adam([self.velocities_tensor], lr=lr)
+
+        with tqdm(total=n_epochs*n_batched_per_epoch, desc="Iterations of model fitting", disable=not bar) as pbar:
+            for _ in range(n_epochs):
+                random.shuffle(gather_data)
+
+                for j in range(n_batched_per_epoch):
+                    batch = gather_data[j * batch_size : (j + 1) * batch_size]
+                    train_tensors = self.get_train_tensors_batch(batch, spatial_margin=spatial_margin,
+                                                                 n_sweeps=n_sweeps, max_n_steps=max_n_steps,
+                                                                 n_workers=n_workers)
+                    true_traveltimes, trace_indices, cell_indices, cell_passes = train_tensors
+
+                    pred_traveltimes = torch.zeros_like(true_traveltimes, dtype=torch.float64)
+                    cell_velocities = torch.index_select(self.velocities_tensor.ravel(), 0, cell_indices)
+                    pred_traveltimes.scatter_add_(0, trace_indices, 1000 * cell_passes / cell_velocities)
+
+                    loss = torch.abs(true_traveltimes - pred_traveltimes).mean()
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    self.enforce_constraints()
+                    self.loss_hist.append(loss.item())
+
+                    pbar.set_postfix_str(f"Loss: {self.loss_hist[-1]:.5f}")
+                    pbar.update()
 
     def predict(self, dataset, spatial_margin=3, n_sweeps=2, max_n_steps=None, n_workers=None, bar=True,
                 predicted_first_breaks_header=None):
@@ -299,6 +370,11 @@ class TomoModel:
         return Statics(survey, source_statics, source_id_cols, receiver_statics, receiver_id_cols, validate=False)
 
     # Model visualization
+
+    def plot_loss(self, figsize=(10, 3)):
+        _, ax = plt.subplots(figsize=figsize)
+        ax.plot(self.loss_hist)
+        ax.set_title("Traveltime MAE")
 
     def plot_profile(self, **kwargs):
         return ProfilePlot(self, **kwargs).plot()

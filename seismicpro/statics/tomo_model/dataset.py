@@ -32,3 +32,7 @@ class TomoModelTravelTimeDataset(TravelTimeDataset):
             dataset_pos = df.get_column("ix").to_numpy()
             gather_data_list.append((source, receivers, target_tt, dataset_pos))
         self.gather_data = gather_data_list
+
+    @property
+    def n_train_gathers(self):
+        return len(self.gather_data)
