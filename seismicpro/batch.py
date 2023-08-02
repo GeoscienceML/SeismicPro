@@ -100,6 +100,13 @@ class SeismicBatch(Batch):
                 self.add_components(comp, init=self.array_of_nones)
         return np.arange(len(self))
 
+    def init_coef_component(self, *args, dst=None, dst_coefs=None, **kwargs):
+        """Create and preallocate new attributes with names listed in `dst` and `dst_coefs` if they don't exist and
+        return ordinal numbers of batch items. This method is used as a default `init` for `apply_agc` method."""
+        dst_coefs = [] if dst_coefs is None else to_list(dst_coefs)
+        dst = [] if dst is None else to_list(dst)
+        return self.init_component(*args, dst=dst+dst_coefs, **kwargs)
+
     @property
     def flat_indices(self):
         """np.ndarray: Unique identifiers of seismic gathers in the batch flattened into a 1d array."""
@@ -438,7 +445,7 @@ class SeismicBatch(Batch):
         return self
 
     @action
-    @inbatch_parallel(init='init_component', target='threads')
+    @inbatch_parallel(init="init_component", target="threads")
     def crop(self, pos, src, origins, crop_shape, dst=None, joint=True, n_crops=1, stride=None, **kwargs):
         """Crop batch components.
 
@@ -508,6 +515,89 @@ class SeismicBatch(Batch):
             src_cropped = src_obj.crop(origins, crop_shape, n_crops, stride, **kwargs)
             setattr(self[pos], dst, src_cropped)
 
+        return self
+
+    @action
+    @inbatch_parallel(init="init_coef_component", target="threads")
+    def apply_agc(self, pos, src, dst=None, dst_coefs=None, window_size=250, mode='rms'):
+        """Calculate instantaneous or RMS amplitude AGC coefficients and apply them to gather data.
+
+        Parameters
+        ----------
+        src : str or list of str
+            Batch components with gather instances to apply AGC to.
+        dst : str or list of str, optional
+            Batch components to store the scaled gathers in. Equals to `src` if not given.
+        dst_coefs : str or list of str, optional
+            Batch components to store AGC coefficients in.
+        window_size : int, optional, defaults to 250
+            Window size to calculate AGC scaling coefficient in, measured in milliseconds.
+        mode : str, optional, defaults to 'rms'
+            Mode for AGC: if 'rms', root mean squared value of non-zero amplitudes in the given window
+            is used as scaling coefficient (RMS amplitude AGC), if 'abs' - mean of absolute non-zero
+            amplitudes (instantaneous AGC).
+
+        Returns
+        -------
+        self : SeismicBatch
+            The batch with scaled gathers and optionally AGC coefficients.
+        """
+        src_list, dst_list = align_src_dst(src, dst)
+        dst_coefs_list = to_list(dst_coefs) if dst_coefs is not None else [None] * len(dst_list)
+        if len(dst_coefs_list) != len(dst_list):
+            raise ValueError("dst_coefs and dst should have the same length.")
+
+        # pylint: disable-next=redefined-argument-from-local
+        for src, dst_coef, dst in zip(src_list, dst_coefs_list, dst_list):
+            src_obj = getattr(self, src)[pos]
+            src_obj = src_obj.copy() if src != dst else src_obj
+            return_coefs = dst_coef is not None
+            results = src_obj.apply_agc(window_size=window_size, mode=mode, return_coefs=return_coefs)
+            if return_coefs:
+                setattr(self[pos], dst, results[0])
+                setattr(self[pos], dst_coef, results[1])
+            else:
+                setattr(self[pos], dst, results)
+        return self
+
+    @action
+    @inbatch_parallel(init="init_component", target="threads")
+    def undo_agc(self, pos, src, src_coefs, dst=None):
+        """Undo previously applied AGC correction using precomputed AGC coefficients.
+
+        Parameters
+        ----------
+        src : str or list of str
+            Batch components with scaled gather instances.
+        src_coefs : str or list of str
+            Batch components with gather instances with AGC coefficients in the `data` attribute.
+        dst : str or list of str, optional
+            Batch components to store unscaled gathers in. Equals to `src` if not given.
+
+        Returns
+        -------
+        self : SeismicBatch
+            The batch with unscaled gathers.
+
+        Raises
+        ------
+        ValueError
+            If `src` and `src_coefs` have different lengths.
+        """
+        src_list, dst_list = align_src_dst(src, dst)
+        src_coefs_list = to_list(src_coefs)
+
+        if len(src_list) != len(src_coefs_list):
+            raise ValueError("The length of `src_coefs` must match the length of `src`")
+
+        # pylint: disable-next=redefined-argument-from-local
+        for src, coef, dst in zip(src_list, src_coefs_list, dst_list):
+            src_obj = getattr(self, src)[pos]
+            src_coef = getattr(self, coef)[pos]
+
+            src_obj = src_obj.copy() if src != dst else src_obj
+            src_noagc = src_obj.undo_agc(coefs_gather=src_coef)
+            setattr(self[pos], dst, src_noagc)
         return self
 
     @action(no_eval="save_to")
