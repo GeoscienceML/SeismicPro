@@ -178,6 +178,7 @@ class TomoModel:
         trace_indices = torch.from_numpy(trace_indices)
         cell_indices = torch.from_numpy(cell_indices)
         cell_passes = torch.from_numpy(cell_passes)
+        return traveltimes, trace_indices, cell_indices, cell_passes
 
     def get_train_tensors_batch(self, batch, spatial_margin=3, n_sweeps=2, max_n_steps=None, n_workers=None):
         if n_workers is None:
