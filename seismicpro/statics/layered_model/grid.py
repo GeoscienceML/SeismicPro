@@ -3,7 +3,7 @@ from functools import partial
 import numpy as np
 import polars as pl
 
-from .dataset import TravelTimeDataset
+from .dataset import LayeredModelTravelTimeDataset
 from ...metrics import MetricMap
 from ...const import HDR_FIRST_BREAK
 from ...utils import to_list, IDWInterpolator
@@ -185,12 +185,13 @@ class SpatialGrid:
     # Dataset generation
 
     def create_dataset(self, survey=None, first_breaks_header=HDR_FIRST_BREAK, uphole_correction_method="auto",
-                       slowness_grid_size=500):
+                       slowness_grid_step=500):
         if survey is None:
             if not self.has_survey:
                 raise ValueError("A survey to create a dataset must be passed")
             survey = self.survey
-        return TravelTimeDataset(survey, self, first_breaks_header, uphole_correction_method, slowness_grid_size)
+        return LayeredModelTravelTimeDataset(survey, self, first_breaks_header, uphole_correction_method,
+                                             slowness_grid_step)
 
     # Grid visualization
 

@@ -387,8 +387,8 @@ class LayeredModel:
     # Dataset generation
 
     def create_dataset(self, survey=None, first_breaks_header=HDR_FIRST_BREAK, uphole_correction_method="auto",
-                       slowness_grid_size=500):
-        return self.grid.create_dataset(survey, first_breaks_header, uphole_correction_method, slowness_grid_size)
+                       slowness_grid_step=500):
+        return self.grid.create_dataset(survey, first_breaks_header, uphole_correction_method, slowness_grid_step)
 
     # Model fitting and inference
 
@@ -420,11 +420,9 @@ class LayeredModel:
         thicknesses_reg_coef = torch.tensor(thicknesses_reg_coef, dtype=torch.float32, device=self.device)
         thicknesses_reg_coef = torch.broadcast_to(thicknesses_reg_coef, (self.n_refractors,))
 
-        used_coords_mask = dataset.used_coords_mask.numpy()
-        used_coords_indices = np.nonzero(used_coords_mask)[0]
-        idw = IDWInterpolator(self.coords[used_coords_mask], neighbors=n_reg_neighbors + 1)
+        idw = IDWInterpolator(self.coords[dataset.used_coords_indices], neighbors=n_reg_neighbors + 1)
         neighbors_dist, neighbors_indices = idw.nearest_neighbors.query(self.coords, k=idw.neighbors[1:], workers=-1)
-        neighbors_indices = used_coords_indices[neighbors_indices]
+        neighbors_indices = dataset.used_coords_indices[neighbors_indices]
         neighbors_weights = idw._distances_to_weights(neighbors_dist)  # pylint: disable=protected-access
         neighbors_indices = torch.tensor(neighbors_indices, dtype=torch.int32, device=self.device)
         neighbors_weights = torch.tensor(neighbors_weights, dtype=torch.float32, device=self.device)
@@ -475,12 +473,11 @@ class LayeredModel:
     @torch.no_grad()
     def interpolate_unused_points(self, dataset):
         used_coords_mask = dataset.used_coords_mask
-        used_coords_mask_np = used_coords_mask.numpy()
-        if used_coords_mask_np.all():
+        if used_coords_mask.all():
             return
 
-        used_coords_grid = self.grid[used_coords_mask_np]
-        unused_coords_grid = self.grid[~used_coords_mask_np]
+        used_coords_grid = self.grid[used_coords_mask]
+        unused_coords_grid = self.grid[~used_coords_mask]
         self._interpolate_tensor(self.weathering_slowness_tensor, used_coords_grid, unused_coords_grid,
                                  used_coords_mask)
         self._interpolate_tensor(self.slownesses_tensor, used_coords_grid, unused_coords_grid, used_coords_mask)
