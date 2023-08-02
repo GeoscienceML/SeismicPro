@@ -517,8 +517,7 @@ class LayeredModel:
 
     def predict(self, dataset, batch_size=1000000, bar=True, store_to_survey=True,
                 predicted_first_breaks_header="PredictedFirstBreak"):
-        loader = dataset.create_predict_loader(batch_size=batch_size, n_epochs=1, shuffle=False, drop_last=False,
-                                               device=self.device, bar=bar)
+        loader = dataset.create_predict_loader(batch_size=batch_size, device=self.device, bar=bar)
         with torch.no_grad():
             pred_traveltimes = [(self._estimate_traveltimes(*params) - traveltime_corrections).cpu()
                                 for *params, traveltime_corrections in loader]
