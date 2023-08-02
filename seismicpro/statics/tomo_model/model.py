@@ -219,7 +219,7 @@ class TomoModel:
             n_workers=None, bar=True):
         batch_size = min(batch_size, dataset.n_train_gathers)
         n_batched_per_epoch = dataset.n_train_gathers // batch_size
-        gather_data = dataset.gather_data[:]
+        gather_data = [data[:3] for data in dataset.gather_data]
 
         optimizer = torch.optim.Adam([self.velocities_tensor], lr=lr)
 
