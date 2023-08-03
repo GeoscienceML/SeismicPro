@@ -1334,49 +1334,89 @@ class Gather(TraceContainer, SamplesContainer):
         return self
 
     @batch_method(target="for")
-    def calculate_avo(self, window=None, horizon_header=None, horizon_window_size=20, mode="rms", avo_col="avo_stats"):
+    def calculate_amplitude_statistics(self, window_size=None, horizon_header=None, horizon_shift=20, mode='rms',
+                                       header_col="stats"):
+        """ Compute tracewise amplitude statistics within specified windows or based on horizon information and store
+        the results in `self.headers`.
+
+        Notes
+        -----
+        1. If both `window_size` and `horizon_header` are provided, the `window_size` parameter takes precedence.
+        2. Zero amplitudes are not involved in statistics computation, `np.nan` will be used for traces with only zero
+        amplitudes in specified window.
+
+        Parameters
+        ----------
+        window_size : array-like with length 2, optional, defaults to None
+            An array with the right and left (inclusive) borders of the window to calculate statistics in.
+            Either `window_size` or `horizon_header` should be provided. Measured in milliseconds.
+        horizon_header : str, optional, defaults to None
+            Headers column containing the horizon times relative to which statistics will be calculated.
+            Either `window_size` or `horizon_header` should be provided.
+        horizon_shift : int or array-like with length 2, optional, defaults to 20
+            A shift from horizon times defined in the `horizon_header` column to the left and right borders of the
+            window. If `int`, the same shift is applied to both borders. Negative shift values are also allowed.
+            Measured in milliseconds.
+        mode : 'rms' or 'abs', optional, defaults to 'rms'
+            A mode used for calculating statictics: if 'rms', root mean squared value of amplitudes in the given window
+            is used, if 'abs' - mean of absolute amplitudes.
+        header_col : str, optional, defaults to "stats"
+            Headers column to save calculated statistics to.
+
+        Returns
+        -------
+        self : Gather
+            A gather with calculated smplitude statictics in headers column defined by `header_col`.
+
+        Raises
+        ------
+        ValueError
+             If given `mode` is unknown.
+            If `window_size` is not array-like or doesn't contain exactly two elements.
+            If `horizon_shift` is not int or array-like with exactly two elements.
+        """
         start_ixs = np.zeros(self.n_traces, dtype=np.int32)
         end_ixs = np.full(self.n_traces, fill_value=self.n_samples, dtype=np.int32)
 
-        if window is not None:
-            if not isinstance(window, (tuple, list, np.ndarray)):
-                raise ValueError(f"`window` should be an array-like, not {type(window)}")
-            if len(window) != 2:
-                raise ValueError(f"`window` must have exact two elements, not {len(window)}")
-            limits = self.times_to_indices(np.array(window), round=True).astype(np.int32)
+        if window_size is not None:
+            if not isinstance(window_size, (tuple, list, np.ndarray)):
+                raise ValueError(f"`window_size` should be an array-like, not {type(window_size)}")
+            if len(window_size) != 2:
+                raise ValueError(f"`window_size` must have exactly two elements, not {len(window_size)}")
+            limits = self.times_to_indices(np.array(window_size), round=True).astype(np.int32)
             start_ixs = np.full(self.n_traces, fill_value=limits[0], dtype=np.int32)
             end_ixs = np.full(self.n_traces, fill_value=limits[1], dtype=np.int32)
 
         elif horizon_header is not None:
             centers = self[horizon_header]
-            if isinstance(horizon_window_size, (int, np.integer)):
-                horizon_window_size = [horizon_window_size, horizon_window_size]
-            elif not isinstance(horizon_window_size, (tuple, list, np.ndarray)):
-                raise ValueError("`horizon_window_size` should be either int or array-like, not "\
-                                 f"{type(horizon_window_size)}")
-            if len(horizon_window_size) != 2:
-                raise ValueError("If `horizon_window_size` is array-like, it must have exactly two elements, not "\
-                                 f"{len(horizon_window_size)}")
-            start_times = np.clip(centers - horizon_window_size[0], 0, self.samples[-1])
+            if isinstance(horizon_shift, (int, np.integer)):
+                horizon_shift = [horizon_shift, horizon_shift]
+            elif not isinstance(horizon_shift, (tuple, list, np.ndarray)):
+                raise ValueError("`horizon_shift` should be either int or array-like, not "\
+                                 f"{type(horizon_shift)}")
+            if len(horizon_shift) != 2:
+                raise ValueError("If `horizon_shift` is array-like, it must have exactly two elements, not "\
+                                 f"{len(horizon_shift)}")
+            start_times = np.clip(centers - horizon_shift[0], 0, self.samples[-1])
             start_ixs = self.times_to_indices(start_times, round=True).astype(np.int32)
-            end_times = np.clip(centers + horizon_window_size[1], 0, self.samples[-1])
+            end_times = np.clip(centers + horizon_shift[1], 0, self.samples[-1])
             end_ixs = self.times_to_indices(end_times, round=True).astype(np.int32)
 
         func_dict = {
-            "rms": stats.numba_rms,
-            "abs": stats.numba_abs
+            "rms": stats.compute_rms,
+            "abs": stats.compute_abs
         }
 
         method = func_dict.get(mode)
         if method is None:
             raise ValueError(f"`mode` should be either `abs` or `rms`, not {mode}")
 
-        # Do not take into account zero amplitudes while calculating avo
+        # Do not take into account zero amplitudes while calculating statistics
         data = np.where(self.data != 0, self.data, np.nan)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=SettingWithCopyWarning)
             # Include the next index of the right border of the window to mimic the behavior of conventional software
-            self[avo_col] = method(data, start_ixs, end_ixs + 1)
+            self[header_col] = method(data, start_ixs, end_ixs + 1)
         return self
 
     #------------------------------------------------------------------------#
