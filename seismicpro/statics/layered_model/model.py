@@ -408,8 +408,8 @@ class LayeredModel:
 
         self.weathering_slowness_tensor.clip_(min=self.slownesses_tensor[:, 0])
 
-    def prepare_regularization_tensors(self, dataset, n_reg_neighbors=32,  velocities_reg_coef=1, elevations_reg_coef=0.5,
-                                       thicknesses_reg_coef=0.5):
+    def prepare_regularization_tensors(self, dataset, n_reg_neighbors=32,  velocities_reg_coef=1,
+                                       elevations_reg_coef=0.5, thicknesses_reg_coef=0.5):
         if n_reg_neighbors is None or n_reg_neighbors == 0:
             return None, None, None, None, None
 

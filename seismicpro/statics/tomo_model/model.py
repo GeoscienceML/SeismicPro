@@ -31,6 +31,7 @@ class TomoModel:
         self.enforce_constraints()
 
         self.loss_hist = []
+        self.reg_hist = []
 
     # IO
 
@@ -216,8 +217,9 @@ class TomoModel:
         if self.grid.has_survey:
             self.velocities_tensor[self.grid.air_mask] = 330
 
-    def fit(self, dataset, batch_size=320, n_epochs=5, lr=0.1, spatial_margin=3, n_sweeps=2, max_n_steps=None,
-            n_workers=None, bar=True):
+    def fit(self, dataset, batch_size=320, n_epochs=5, lr=0.1, vertical_reg_coef=1, spatial_reg_coef=5,
+            spatial_margin=3, n_sweeps=2, max_n_steps=None, n_workers=None, bar=True):
+        cell_size = self.grid.cell_size.tolist()
         batch_size = min(batch_size, dataset.n_train_gathers)
         n_batched_per_epoch = dataset.n_train_gathers // batch_size
         gather_data = [data[:3] for data in dataset.gather_data]
@@ -238,13 +240,22 @@ class TomoModel:
                     pred_traveltimes = torch.zeros_like(true_traveltimes, dtype=torch.float64)
                     cell_velocities = torch.index_select(self.velocities_tensor.ravel(), 0, cell_indices)
                     pred_traveltimes.scatter_add_(0, trace_indices, 1000 * cell_passes / cell_velocities)
-
                     loss = torch.abs(true_traveltimes - pred_traveltimes).mean()
+
+                    vel_z_grad, vel_x_grad, vel_y_grad = torch.gradient(self.velocities_tensor, spacing=cell_size)
+                    z_reg = torch.index_select(vel_z_grad.ravel(), 0, cell_indices).abs().mean()
+                    x_reg = torch.index_select(vel_x_grad.ravel(), 0, cell_indices).abs().mean()
+                    y_reg = torch.index_select(vel_y_grad.ravel(), 0, cell_indices).abs().mean()
+                    reg = vertical_reg_coef * z_reg + spatial_reg_coef * (x_reg + y_reg)
+
+                    total_loss = loss + reg
                     optimizer.zero_grad()
-                    loss.backward()
+                    total_loss.backward()
                     optimizer.step()
                     self.enforce_constraints()
+
                     self.loss_hist.append(loss.item())
+                    self.reg_hist.append(reg.item())
 
                     pbar.set_postfix_str(f"Loss: {self.loss_hist[-1]:.5f}")
                     pbar.update()
@@ -372,10 +383,16 @@ class TomoModel:
 
     # Model visualization
 
-    def plot_loss(self, figsize=(10, 3)):
-        _, ax = plt.subplots(figsize=figsize)
-        ax.plot(self.loss_hist)
-        ax.set_title("Traveltime MAE")
+    def plot_loss(self, show_reg=True, figsize=(10, 3)):
+        n_rows = 2 if show_reg else 1
+        width, height = figsize
+        figsize = (width, height * n_rows)
+        axes = plt.subplots(nrows=n_rows, sharex=True, squeeze=False, tight_layout=True, figsize=figsize)[1].ravel()
+        axes[0].plot(self.loss_hist)
+        axes[0].set_title("Traveltime MAE")
+        if show_reg:
+            axes[1].plot(self.reg_hist)
+            axes[1].set_title("Regularization term")
 
     def plot_profile(self, **kwargs):
         return ProfilePlot(self, **kwargs).plot()
