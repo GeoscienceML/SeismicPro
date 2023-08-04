@@ -1,4 +1,4 @@
-"""Implements AmplitudeOffsetDistribution class."""
+"""Implements AmplitudeOffsetDistribution class"""
 
 import numpy as np
 import polars as pl
@@ -54,7 +54,7 @@ class AmplitudeOffsetDistribution:
     stats_df : pd.DataFrame
         A DataFrame containing statistics for each bin within each gather.
     bins_df : pd.DataFrame
-        A DataFrame containing mean amplitude values per bin and it's polynomial approximation.
+        A DataFrame containing mean amplitude values per bin and its polynomial approximation.
     metric_std : np.float64
         The mean standard deviation of amplitude statistics across all bins.
     metric_corr : np.float64
@@ -85,7 +85,7 @@ class AmplitudeOffsetDistribution:
                .alias("bin_ix")
         )
 
-        # Replace bin indices to the actual offset values
+        # Replace bin indices with the actual offset values
         headers = headers.with_columns(pl.lit(bin_bounds).take(pl.col("bin_ix")).alias("bin"))
 
         # Find for each gather mean amplitude statistics value in each bin
@@ -103,11 +103,11 @@ class AmplitudeOffsetDistribution:
         self.metric_corr = bins_df.select(pl.corr(self.avo_column, "bins_approx")).item()
 
         self.stats_df = stats_df[["bin", self.avo_column]].to_pandas()
-        # Sort `bins_df` before converting to avoid sorting in `plot`` method
+        # Sort `bins_df` before converting to avoid sorting in `plot` method
         self.bins_df = bins_df.sort("bin").to_pandas()
 
     def _calculate_bin_polynomial(self, bins_df, pol_degree=3):
-        """Calculate polynomial approximation of the mean amplitude statistics per bin."""
+        """Calculate a polynomial approximation of the mean amplitude statistics per bin."""
         not_nan_df = bins_df.filter(pl.col(self.avo_column).is_not_null())
 
         poly = np.polyfit(not_nan_df["bin"], not_nan_df[self.avo_column], deg=pol_degree)
@@ -176,7 +176,6 @@ class AmplitudeOffsetDistribution:
         save_to : str, optional
             If provided, the path to save the figure. If None, the figure is not saved.
         """
-        # TODO: How to name plots?
         fig, ax = plt.subplots(figsize=figsize)
         self.stats_df.plot(x="bin", y=self.avo_column, kind="scatter", ax=ax, s=dot_size, label="Gather stats in bin")
         self.bins_df.plot(x="bin", y=self.avo_column, kind="scatter", ax=ax, s=avg_size, marker='v', color='r',

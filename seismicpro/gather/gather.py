@@ -1336,7 +1336,7 @@ class Gather(TraceContainer, SamplesContainer):
     @batch_method(target="for")
     def calculate_amplitude_statistics(self, window_size=None, horizon_header=None, horizon_shift=20, mode='rms',
                                        header_col="stats"):
-        """ Compute tracewise amplitude statistics within specified windows or based on horizon information and store
+        """Compute tracewise amplitude statistics within specified window or based on horizon information and store
         the results in `self.headers`.
 
         Notes
@@ -1366,13 +1366,13 @@ class Gather(TraceContainer, SamplesContainer):
         Returns
         -------
         self : Gather
-            A gather with calculated smplitude statictics in headers column defined by `header_col`.
+            A gather with calculated amplitude statictics in headers column defined by `header_col`.
 
         Raises
         ------
         ValueError
-             If given `mode` is unknown.
-            If `window_size` is not array-like or doesn't contain exactly two elements.
+            If given `mode` is unknown.
+            If `window_size` is not array-like or does not contain exactly two elements.
             If `horizon_shift` is not int or array-like with exactly two elements.
         """
         start_ixs = np.zeros(self.n_traces, dtype=np.int32)
