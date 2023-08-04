@@ -28,7 +28,7 @@ setup(
         'numpy>=1.20',
         'scipy>=1.7',
         'numba>=0.57',
-        'pandas>=1.3',
+        'pandas>=2.0',
         'polars[pyarrow]>=0.18.7',
         'scikit-learn>=0.23.2',
         'opencv_python>=4.5.1',
