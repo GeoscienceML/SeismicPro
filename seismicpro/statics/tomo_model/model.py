@@ -133,8 +133,8 @@ class TomoModel:
         max_step_size = np.float64(max_step_size)
         max_n_steps = np.int32(max_n_steps)
 
-        ray_params = describe_rays(source, receivers, velocities, origin, cell_size, z_grad.grid, x_grad.grid,
-                                   y_grad.grid, tt_grid.zaxis, tt_grid.xaxis, tt_grid.yaxis,
+        ray_params = describe_rays(source, tt_grid._vzero, receivers, velocities, origin, cell_size, tt_grid.grid,
+                                   z_grad.grid, x_grad.grid, y_grad.grid, tt_grid.zaxis, tt_grid.xaxis, tt_grid.yaxis,
                                    max_step_size=max_step_size, max_n_steps=max_n_steps)
         return tt_grid, *ray_params
 
