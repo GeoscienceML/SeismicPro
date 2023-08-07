@@ -10,7 +10,7 @@ FASTMATH_FLAGS = {"nnan", "ninf", "nsz", "arcp", "contract", "afn"}
 
 
 @njit("(f8)(f8, f8, f8[:])", nogil=True, fastmath=FASTMATH_FLAGS)
-def get_shrink_factor(coord, grad, bounds):
+def get_step_size(coord, grad, bounds):
     if abs(grad) < TOL:
         return 0
 
@@ -38,9 +38,10 @@ def map_to_edge(coord, bounds):
     return coord
 
 
-@njit("Tuple((f8[:, :, :], i4[:], b1[:]))(f8[:], f8[:, :], f8[:, :, :], f8[:, :, :], f8[:, :, :], f8[:], f8[:], f8[:], i4)",
+@njit("Tuple((f8[:, :, :], i4[:], b1[:]))"
+      "(f8[:], f8[:, :], f8[:, :, :], f8[:, :, :], f8[:, :, :], f8[:], f8[:], f8[:], f8, i4)",
       nogil=True, fastmath=FASTMATH_FLAGS)
-def raytrace(src, dst_list, z_grad, x_grad, y_grad, z, x, y, max_n_steps):
+def raytrace(src, dst_list, z_grad, x_grad, y_grad, z, x, y, max_step_size, max_n_steps):
     dz, dx, dy = z[1] - z[0], x[1] - x[0], y[1] - y[0]
 
     zsrc, xsrc, ysrc = src
@@ -68,18 +69,22 @@ def raytrace(src, dst_list, z_grad, x_grad, y_grad, z, x, y, max_n_steps):
             gz = -interp3d(z, x, y, z_grad, cur)
             gx = -interp3d(z, x, y, x_grad, cur)
             gy = -interp3d(z, x, y, y_grad, cur)
+            gn = (gz**2 + gx**2 + gy**2)**0.5
+            gz /= gn
+            gx /= gn
+            gy /= gn
 
-            z_shrink = get_shrink_factor(cur[0], gz, z)
-            x_shrink = get_shrink_factor(cur[1], gx, x)
-            y_shrink = get_shrink_factor(cur[2], gy, y)
-            factors = [factor for factor in [z_shrink, x_shrink, y_shrink] if factor > 0]
-            if len(factors) == 0:
+            z_step = get_step_size(cur[0], gz, z)
+            x_step = get_step_size(cur[1], gx, x)
+            y_step = get_step_size(cur[2], gy, y)
+            step_sizes = [step for step in [z_step, x_step, y_step] if step > 0]
+            if len(step_sizes) == 0:
                 break
 
-            shrink = min(factors)
-            cur[0] = map_to_edge(cur[0] + gz * shrink, z)
-            cur[1] = map_to_edge(cur[1] + gx * shrink, x)
-            cur[2] = map_to_edge(cur[2] + gy * shrink, y)
+            step_size = min(min(step_sizes), max_step_size)
+            cur[0] = map_to_edge(cur[0] + gz * step_size, z)
+            cur[1] = map_to_edge(cur[1] + gx * step_size, x)
+            cur[2] = map_to_edge(cur[2] + gy * step_size, y)
             ray[j] = cur
 
             z_stop = z_stop_min <= cur[0] <= z_stop_max
@@ -170,7 +175,8 @@ def get_passes(rays, counts, succeeded, velocity_grid, origin, cell_size):
 
 
 @njit(nogil=True, fastmath=FASTMATH_FLAGS)
-def describe_rays(src, dst_list, velocities, origin, cell_size, z_grad, x_grad, y_grad, z, x, y, max_n_steps):
-    rays, counts, succeeded = raytrace(src, dst_list, z_grad, x_grad, y_grad, z, x, y, max_n_steps)
+def describe_rays(src, dst_list, velocities, origin, cell_size, z_grad, x_grad, y_grad, z, x, y,
+                  max_step_size, max_n_steps):
+    rays, counts, succeeded = raytrace(src, dst_list, z_grad, x_grad, y_grad, z, x, y, max_step_size, max_n_steps)
     trace_indices, cell_indices, cell_passes = get_passes(rays, counts, succeeded, velocities, origin, cell_size)
     return rays, counts, succeeded, trace_indices, cell_indices, cell_passes

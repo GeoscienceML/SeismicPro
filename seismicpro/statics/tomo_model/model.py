@@ -113,7 +113,7 @@ class TomoModel:
         return Eikonal3D(velocities[iz_min:iz_max+1, ix_min:ix_max+1, iy_min:iy_max+1], cell_size, cropped_origin)
 
     def describe_rays(self, source, receivers, spatial_margin=3, crop_vertically=False, vertical_margin=1, n_sweeps=2,
-                      max_n_steps=None):
+                      max_step_size=None, max_n_steps=None):
         velocities = self.velocities_tensor.detach().numpy()
         origin = np.require(self.grid.origin, dtype=np.float64)
         cell_size = np.require(self.grid.cell_size, dtype=np.float64)
@@ -123,20 +123,27 @@ class TomoModel:
         tt_grid = cropped_grid.solve(source, nsweep=n_sweeps, return_gradient=True)
         z_grad, x_grad, y_grad = tt_grid.gradient
 
+        if max_step_size is None:
+            max_step_size = cell_size.min()
         if max_n_steps is None:
             nz, nx, ny = tt_grid.shape
-            max_n_steps = 2 * nz + nx + ny
+            dz, dx, dy = cell_size
+            max_dist = 2 * nz * dz + nx * dx + ny * dy
+            max_n_steps = max(max_dist // max_step_size, 2 * nz + nx + ny)
+        max_step_size = np.float64(max_step_size)
+        max_n_steps = np.int32(max_n_steps)
 
         ray_params = describe_rays(source, receivers, velocities, origin, cell_size, z_grad.grid, x_grad.grid,
-                                   y_grad.grid, tt_grid.zaxis, tt_grid.xaxis, tt_grid.yaxis, max_n_steps=max_n_steps)
+                                   y_grad.grid, tt_grid.zaxis, tt_grid.xaxis, tt_grid.yaxis,
+                                   max_step_size=max_step_size, max_n_steps=max_n_steps)
         return tt_grid, *ray_params
 
     @torch.no_grad()
     def estimate_traveltimes(self, source, receivers, spatial_margin=3, crop_vertically=False, vertical_margin=1,
-                             n_sweeps=2, max_n_steps=None):
+                             n_sweeps=2, max_step_size=None, max_n_steps=None):
         ray_params = self.describe_rays(source, receivers, spatial_margin=spatial_margin,
                                         crop_vertically=crop_vertically, vertical_margin=vertical_margin,
-                                        n_sweeps=n_sweeps, max_n_steps=max_n_steps)
+                                        n_sweeps=n_sweeps, max_step_size=max_step_size, max_n_steps=max_n_steps)
         tt_grid, _, _, succeeded, trace_indices, cell_indices, cell_passes = ray_params
 
         n_succeeded = succeeded.sum()
@@ -155,7 +162,7 @@ class TomoModel:
         return tt_pred
 
     def estimate_traveltimes_batch(self, batch, spatial_margin=3, crop_vertically=False, vertical_margin=1, n_sweeps=2,
-                                   max_n_steps=None, n_workers=None, desc=None, bar=True):
+                                   max_step_size=None, max_n_steps=None, n_workers=None, desc=None, bar=True):
         if n_workers is None:
             n_workers = os.cpu_count()
         n_workers = min(len(batch), n_workers)
@@ -166,14 +173,15 @@ class TomoModel:
                 for source, receivers in batch:
                     future = pool.submit(self.estimate_traveltimes, source, receivers, spatial_margin=spatial_margin,
                                         crop_vertically=crop_vertically, vertical_margin=vertical_margin,
-                                        n_sweeps=n_sweeps, max_n_steps=max_n_steps)
+                                        n_sweeps=n_sweeps, max_step_size=max_step_size, max_n_steps=max_n_steps)
                     future.add_done_callback(lambda _: pbar.update())
                     futures.append(future)
         return [future.result() for future in futures]
 
-    def get_train_tensors(self, source, receivers, traveltimes, spatial_margin=3, n_sweeps=2, max_n_steps=None):
+    def get_train_tensors(self, source, receivers, traveltimes, spatial_margin=3, n_sweeps=2, max_step_size=None,
+                          max_n_steps=None):
         ray_params = self.describe_rays(source, receivers, spatial_margin=spatial_margin, crop_vertically=False,
-                                        n_sweeps=n_sweeps, max_n_steps=max_n_steps)
+                                        n_sweeps=n_sweeps, max_step_size=max_step_size, max_n_steps=max_n_steps)
         _, _, _, succeeded, trace_indices, cell_indices, cell_passes = ray_params
         traveltimes = torch.from_numpy(traveltimes[succeeded])
         trace_indices = torch.from_numpy(trace_indices)
@@ -181,7 +189,8 @@ class TomoModel:
         cell_passes = torch.from_numpy(cell_passes)
         return traveltimes, trace_indices, cell_indices, cell_passes
 
-    def get_train_tensors_batch(self, batch, spatial_margin=3, n_sweeps=2, max_n_steps=None, n_workers=None):
+    def get_train_tensors_batch(self, batch, spatial_margin=3, n_sweeps=2, max_step_size=None, max_n_steps=None,
+                                n_workers=None):
         if n_workers is None:
             n_workers = os.cpu_count()
         n_workers = min(len(batch), n_workers)
@@ -190,7 +199,8 @@ class TomoModel:
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             for source, receivers, traveltimes in batch:
                 future = pool.submit(self.get_train_tensors, source, receivers, traveltimes,
-                                     spatial_margin=spatial_margin, n_sweeps=n_sweeps, max_n_steps=max_n_steps)
+                                     spatial_margin=spatial_margin, n_sweeps=n_sweeps, max_step_size=max_step_size,
+                                     max_n_steps=max_n_steps)
                 futures.append(future)
         traveltimes, trace_indices, cell_indices, cell_passes = zip(*[future.result() for future in futures])
 
@@ -218,7 +228,7 @@ class TomoModel:
             self.velocities_tensor[self.grid.air_mask] = 330
 
     def fit(self, dataset, batch_size=320, n_epochs=5, lr=0.1, vertical_reg_coef=1, spatial_reg_coef=5,
-            spatial_margin=3, n_sweeps=2, max_n_steps=None, n_workers=None, bar=True):
+            spatial_margin=3, n_sweeps=2, max_step_size=None, max_n_steps=None, n_workers=None, bar=True):
         cell_size = self.grid.cell_size.tolist()
         batch_size = min(batch_size, dataset.n_train_gathers)
         n_batched_per_epoch = dataset.n_train_gathers // batch_size
@@ -233,8 +243,8 @@ class TomoModel:
                 for j in range(n_batched_per_epoch):
                     batch = gather_data[j * batch_size : (j + 1) * batch_size]
                     train_tensors = self.get_train_tensors_batch(batch, spatial_margin=spatial_margin,
-                                                                 n_sweeps=n_sweeps, max_n_steps=max_n_steps,
-                                                                 n_workers=n_workers)
+                                                                 n_sweeps=n_sweeps, max_step_size=max_step_size,
+                                                                 max_n_steps=max_n_steps, n_workers=n_workers)
                     true_traveltimes, trace_indices, cell_indices, cell_passes = train_tensors
 
                     pred_traveltimes = torch.zeros_like(true_traveltimes, dtype=torch.float64)
@@ -260,12 +270,13 @@ class TomoModel:
                     pbar.set_postfix_str(f"Loss: {self.loss_hist[-1]:.5f}")
                     pbar.update()
 
-    def predict(self, dataset, spatial_margin=3, n_sweeps=2, max_n_steps=None, n_workers=None, bar=True,
-                predicted_first_breaks_header=None):
+    def predict(self, dataset, spatial_margin=3, n_sweeps=2, max_step_size=None, max_n_steps=None, n_workers=None,
+                bar=True, predicted_first_breaks_header=None):
         locations = [gather_data[:2] for gather_data in dataset.gather_data]
         dataset_pos = [gather_data[-1] for gather_data in dataset.gather_data]
         tt_list = self.estimate_traveltimes_batch(locations, spatial_margin=spatial_margin, crop_vertically=False,
-                                                  n_sweeps=n_sweeps, max_n_steps=max_n_steps, n_workers=n_workers,
+                                                  n_sweeps=n_sweeps, max_step_size=max_step_size,
+                                                  max_n_steps=max_n_steps, n_workers=n_workers,
                                                   desc="Gathers processed", bar=bar)
         pred_traveltimes = np.empty_like(dataset.true_traveltimes)
         pred_traveltimes[np.concatenate(dataset_pos)] = np.concatenate(tt_list)
