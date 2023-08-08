@@ -139,19 +139,20 @@ def get_passes(rays, counts, succeeded, velocity_grid, origin, cell_size):
     _, nx, ny = velocity_grid.shape
     dz, dx, dy = cell_size
     z_min, x_min, y_min = origin
-    n_cells = (counts[succeeded] - 1).sum()
+    max_n_cells = (counts[succeeded] - 1).sum()
 
-    trace_indices = np.empty(n_cells, dtype=np.int64)
-    cell_indices = np.empty(n_cells, dtype=np.int64)
-    cell_passes = np.empty(n_cells, dtype=np.float64)
+    trace_indices = np.empty(max_n_cells, dtype=np.int64)
+    cell_indices = np.empty(max_n_cells, dtype=np.int64)
+    cell_passes = np.empty(max_n_cells, dtype=np.float64)
 
-    offset = 0
-    i_succeeded = 0
+    succeeded_trace_ix = -1
+    write_ix = -1
 
     for i in range(len(rays)):
         if not succeeded[i]:
             continue
 
+        succeeded_trace_ix += 1
         count = counts[i]
         ray = rays[i, :count]
 
@@ -159,7 +160,7 @@ def get_passes(rays, counts, succeeded, velocity_grid, origin, cell_size):
             z_pass = abs(ray[j + 1, 0] - ray[j, 0])
             x_pass = abs(ray[j + 1, 1] - ray[j, 1])
             y_pass = abs(ray[j + 1, 2] - ray[j, 2])
-            cell_passes[offset + j] = (z_pass * z_pass + x_pass * x_pass + y_pass * y_pass) ** 0.5
+            pass_dist = (z_pass * z_pass + x_pass * x_pass + y_pass * y_pass) ** 0.5
 
             z_mid = (ray[j + 1, 0] + ray[j, 0]) / 2
             x_mid = (ray[j + 1, 1] + ray[j, 1]) / 2
@@ -186,15 +187,18 @@ def get_passes(rays, counts, succeeded, velocity_grid, origin, cell_size):
             elif y_pass < TOL:
                 candidate_diffs = [(0, 0, -1),]
                 index = refine_index(index, candidate_diffs, velocity_grid)
-
             iz, ix, iy = index
-            cell_indices[offset + j] = iz * nx * ny + ix * ny + iy
+            flat_index = iz * nx * ny + ix * ny + iy
 
-        trace_indices[offset : offset + count - 1] = i_succeeded
-        i_succeeded += 1
-        offset += count - 1
+            if j == 0 or cell_indices[write_ix - 1] != flat_index:
+                write_ix += 1
+                trace_indices[write_ix] = succeeded_trace_ix
+                cell_indices[write_ix] = flat_index
+                cell_passes[write_ix] = pass_dist
+            else:
+                cell_passes[write_ix] += pass_dist
 
-    return trace_indices, cell_indices, cell_passes
+    return trace_indices[: write_ix + 1], cell_indices[: write_ix + 1], cell_passes[: write_ix + 1]
 
 
 @njit(nogil=True, fastmath=FASTMATH_FLAGS)
