@@ -234,7 +234,9 @@ class TomoModel:
         n_batched_per_epoch = dataset.n_train_gathers // batch_size
         gather_data = [data[:3] for data in dataset.gather_data]
 
-        optimizer = torch.optim.Adam([self.velocities_tensor], lr=lr)
+        optimizer = torch.optim.Adam([self.velocities_tensor], lr=lr, betas=(0.5, 0.9))
+        best_epoch_loss = np.inf
+        velocities_tensor = self.velocities_tensor
 
         with tqdm(total=n_epochs*n_batched_per_epoch, desc="Iterations of model fitting", disable=not bar) as pbar:
             for _ in range(n_epochs):
@@ -274,6 +276,13 @@ class TomoModel:
                     reg_loss_str = f"Regularizer: {reg.item():.3f}"
                     pbar.set_postfix_str(f"{total_loss_str}, {model_loss_str}, {reg_loss_str}")
                     pbar.update()
+
+                mean_epoch_loss = np.mean(self.loss_hist[-n_batched_per_epoch:])
+                if mean_epoch_loss < best_epoch_loss:
+                    best_epoch_loss = mean_epoch_loss
+                    velocities_tensor = self.velocities_tensor.detach().clone()
+
+        self.velocities_tensor.data.copy_(velocities_tensor.data)
 
     def predict(self, dataset, spatial_margin=3, n_sweeps=2, max_step_size=None, max_n_steps=None, n_workers=None,
                 bar=True, predicted_first_breaks_header=None):
