@@ -269,7 +269,10 @@ class TomoModel:
                     self.loss_hist.append(loss.item())
                     self.reg_hist.append(reg.item())
 
-                    pbar.set_postfix_str(f"Loss: {self.loss_hist[-1]:.5f}")
+                    total_loss_str = f"Total loss: {total_loss.item():.3f}"
+                    model_loss_str = f"Model loss: {loss.item():.3f}"
+                    reg_loss_str = f"Regularizer: {reg.item():.3f}"
+                    pbar.set_postfix_str(f"{total_loss_str}, {model_loss_str}, {reg_loss_str}")
                     pbar.update()
 
     def predict(self, dataset, spatial_margin=3, n_sweeps=2, max_step_size=None, max_n_steps=None, n_workers=None,
