@@ -252,10 +252,12 @@ class TomoModel:
                     pred_traveltimes.scatter_add_(0, trace_indices, 1000 * cell_passes / cell_velocities)
                     loss = torch.abs(true_traveltimes - pred_traveltimes).mean()
 
+                    unique_cell_mask = torch.bincount(cell_indices, minlength=self.velocities_tensor.numel()) > 0
+                    unique_cell_indices = torch.nonzero(unique_cell_mask)[0]
                     vel_z_grad, vel_x_grad, vel_y_grad = torch.gradient(self.velocities_tensor, spacing=cell_size)
-                    z_reg = torch.index_select(vel_z_grad.ravel(), 0, cell_indices).abs().mean()
-                    x_reg = torch.index_select(vel_x_grad.ravel(), 0, cell_indices).abs().mean()
-                    y_reg = torch.index_select(vel_y_grad.ravel(), 0, cell_indices).abs().mean()
+                    z_reg = torch.index_select(vel_z_grad.ravel(), 0, unique_cell_indices).abs().mean()
+                    x_reg = torch.index_select(vel_x_grad.ravel(), 0, unique_cell_indices).abs().mean()
+                    y_reg = torch.index_select(vel_y_grad.ravel(), 0, unique_cell_indices).abs().mean()
                     reg = vertical_reg_coef * z_reg + spatial_reg_coef * (x_reg + y_reg)
 
                     total_loss = loss + reg
