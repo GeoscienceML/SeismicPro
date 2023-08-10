@@ -521,7 +521,7 @@ class LayeredModel:
             pred_traveltimes = [(self._estimate_traveltimes(*params) - traveltime_corrections).cpu()
                                 for *params, traveltime_corrections in loader]
         pred_traveltimes = torch.cat(pred_traveltimes).numpy()
-        dataset.pred_traveltimes = pred_traveltimes
+        dataset.pred_traveltimes = np.maximum(pred_traveltimes, 0)
 
         if predicted_first_breaks_header is not None:
             dataset.store_predictions_to_survey(predicted_first_breaks_header)

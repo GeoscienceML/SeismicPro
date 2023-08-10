@@ -294,8 +294,7 @@ class TomoModel:
                                                   desc="Gathers processed", bar=bar)
         pred_traveltimes = np.empty_like(dataset.true_traveltimes)
         pred_traveltimes[np.concatenate(dataset_pos)] = np.concatenate(tt_list)
-        pred_traveltimes -= dataset.traveltime_corrections
-        dataset.pred_traveltimes = pred_traveltimes
+        dataset.pred_traveltimes = np.maximum(pred_traveltimes - dataset.traveltime_corrections, 0)
 
         if predicted_first_breaks_header is not None:
             dataset.store_predictions_to_survey(predicted_first_breaks_header)
