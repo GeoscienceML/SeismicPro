@@ -5,6 +5,8 @@ import numpy as np
 from .velocity_model import calculate_stacking_velocity
 from ..utils import to_list, VFUNC
 
+from ..decorators import batch_method
+
 
 class StackingVelocity(VFUNC):
     """A class representing stacking velocity at a certain point of a field.
@@ -132,7 +134,7 @@ class StackingVelocity(VFUNC):
     @classmethod
     def from_vertical_velocity_spectrum(cls, spectrum, init=None, bounds=None, relative_margin=0.2,
                                         acceleration_bounds="auto", times_step=100, max_offset=5000,
-                                        hodograph_correction_step=25, max_n_skips=2):
+                                        hodograph_correction_step=25, velocity_step=None, max_n_skips=2):
         """Calculate stacking velocity by vertical velocity spectrum.
 
         Notes
@@ -177,6 +179,9 @@ class StackingVelocity(VFUNC):
 
         if init is None and bounds is None:
             raise ValueError("Either init or bounds must be passed")
+        from .stacking_velocity_field import StackingVelocityField
+        if isinstance(init, StackingVelocityField):
+            init = init(spectrum.coords)
         if init is not None and not isinstance(init, StackingVelocity):
             raise ValueError("init must be an instance of StackingVelocity")
         if bounds is not None:
@@ -186,7 +191,7 @@ class StackingVelocity(VFUNC):
 
         kwargs = {"init": init, "bounds": bounds, "relative_margin": relative_margin,
                   "acceleration_bounds": acceleration_bounds, "times_step": times_step, "max_offset": max_offset,
-                  "hodograph_correction_step": hodograph_correction_step, "max_n_skips": max_n_skips}
+                  "hodograph_correction_step": hodograph_correction_step, 'velocity_step': velocity_step, "max_n_skips": max_n_skips}
         stacking_velocity_params = calculate_stacking_velocity(spectrum, **kwargs)
         times, velocities, bounds_times, min_velocity_bound, max_velocity_bound = stacking_velocity_params
         coords = spectrum.coords  # Evaluate only once
@@ -209,3 +214,48 @@ class StackingVelocity(VFUNC):
             An array with stacking velocity values, matching the length of `times`. Measured in meters/seconds.
         """
         return np.maximum(super().__call__(times), 0)
+
+
+    @batch_method(target="for", args_to_unpack="init", copy_src=False)
+    def invert(self, fmin=None, fmax=None, dz=0.005, vpvs=2.5, kd=2, bounds=(0.1, 5)):
+        from disba import surf96
+        from scipy.optimize import minimize
+        
+        mask = (self.times >= fmin) & (self.times <= fmax)
+        freqs = self.times[mask][::-1]
+        velocity = self.velocities[mask][::-1] / 1000 # m/s to km/s
+        period = 1 / freqs
+                
+        elevations = np.arange(0, d.max() + dz, dz)
+
+        d = (velocity / freqs) / kd
+        ix = np.argsort(d)
+        
+        vs = np.interp(elevations, d[ix], velocity[ix]) * 1.1 
+        vp = vs * vpvs
+        rho = vp * 0.32 + 0.77
+        thickness = np.array([dz] * len(elevations))
+            
+        x0=vs
+        bounds = [bounds] * len(x0)
+        
+        dv = 0.3
+        boarders = np.random.choice([-1, 1], (len(vs), len(vs)))
+        initial_simplex = np.concatenate([vs.reshape(1, -1), vs + dv * boarders], axis=0)
+        
+        scipy_res = minimize(loss, args=(velocity, period, thickness, rho, vpvs), x0=x0, bounds=bounds, method='Nelder-Mead', tol=0.010) # options=dict(maxfev=2000)
+        return StackingVelocity(elevations, scipy_res.x * 1000, coords=self.coords)
+
+    
+def func(x, period, thickness, rho, poison=2, dc=0.005):
+    vs = x
+    vp = vs * poison
+    return surf96(period, thickness, vp, vs, rho, mode=0, itype=0, ifunc=3, dc=dc)
+
+
+def loss(x, velocity, period, thickness, rho, poison=2, dc=0.005, alpha=0.005):
+    try:
+        return np.abs(velocity - func(x, period, thickness, rho, poison=poison, dc=dc)).mean() + alpha * np.abs(np.diff(x)).mean()
+    except:
+        return np.nan
+    

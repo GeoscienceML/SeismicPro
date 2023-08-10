@@ -117,7 +117,7 @@ class ScatterMapPlot(MetricMapPlot):
 
     def __init__(self, metric_map, plot_on_click, **kwargs):
         self.coords = metric_map.map_data.index.to_frame(index=False).to_numpy()
-        self.coords_neighbors = NearestNeighbors(n_neighbors=1).fit(self.coords)
+        self.coords_neighbors = NearestNeighbors(n_neighbors=1, n_jobs=80).fit(self.coords)
         super().__init__(metric_map, plot_on_click, **kwargs)
 
     def construct_aux_plot(self):

@@ -259,7 +259,7 @@ class BaseMetricMap:  # pylint: disable=too-many-instance-attributes
         (title, x_ticker, y_ticker), kwargs = set_text_formatting(title, x_ticker, y_ticker, **kwargs)
         map_obj = self._plot_map(ax, is_lower_better=is_lower_better, cmap=cmap, norm=norm, **kwargs)
         ax.set_title(**{"label": self.plot_title, **title})
-        ax.ticklabel_format(style="plain", useOffset=False)
+        # ax.ticklabel_format(style="plain", useOffset=False)
         if keep_aspect:
             ax.set_aspect("equal", adjustable="box")
         add_colorbar(ax, map_obj, colorbar, y_ticker=y_ticker)
@@ -363,7 +363,7 @@ class ScatterMap(BaseMetricMap):
         coords_x, coords_y = map_data.index.to_frame(index=False).to_numpy().T
         ax.set_xlim(*calculate_axis_limits(coords_x))
         ax.set_ylim(*calculate_axis_limits(coords_y))
-        return ax.scatter(coords_x, coords_y, c=map_data, **kwargs)
+        return ax.scatter(coords_x, coords_y, **{**dict(c=map_data), **kwargs})
 
 
 class BinarizedMap(BaseMetricMap):

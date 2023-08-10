@@ -31,6 +31,8 @@ from ..decorators import batch_method, plotter
 from ..const import HDR_FIRST_BREAK, HDR_TRACE_POS, DEFAULT_STACKING_VELOCITY
 from ..velocity_spectrum.utils.coherency_funcs import stacked_amplitude
 
+from ..velocity_spectrum.velocity_spectrum import BeamFormer
+
 
 class Gather(TraceContainer, SamplesContainer):
     """A class representing a single seismic gather.
@@ -959,13 +961,8 @@ class Gather(TraceContainer, SamplesContainer):
         A = A[mask]
         f = f[mask]
         power = np.abs(A)
-
-        power_max = np.nansum(power ** 2, axis=1, keepdims=True) ** 0.5
-        power = np.where(power_max != 0, power / power_max, 0)
-
-        ss.velocity_spectrum = power
-        ss.times = f
-        return ss
+        from ..velocity_spectrum.velocity_spectrum import EmptySpectrum  
+        return EmptySpectrum(self, velocities, f, power)
 
     @batch_method(target="threads", copy_src=False)
     def calculate_ps(self, velocities, fmax=None, new=False):
@@ -974,9 +971,8 @@ class Gather(TraceContainer, SamplesContainer):
 
 
     @batch_method(target="threads", copy_src=False)
-    def calculate_bf(self, velocities, fmax=None, cylindrical=True, weighted=False, p=0):
-        from ..velocity_spectrum.velocity_spectrum import BeamFormer
-        return BeamFormer(self, velocities, fmax=fmax, cylindrical=cylindrical, weighted=weighted, p=p)
+    def calculate_bf(self, velocities, fmax=None, cylindrical=True, weighted=False, p=0, limit_offsets=None):
+        return BeamFormer(self, velocities, fmax=fmax, cylindrical=cylindrical, weighted=weighted, p=p, limit_offsets=limit_offsets)
 
 
     #------------------------------------------------------------------------#
@@ -1605,6 +1601,7 @@ class Gather(TraceContainer, SamplesContainer):
         alpha, lw = [np.clip(MAX_TRACE_DENSITY * (axes_width / self.n_traces), *val_bounds) if val is None else val
                      for val, val_bounds in zip([alpha, lw], BOUNDS)]
 
+        self.data[~np.isfinite(self.data)] = self.data[0, 1]
         std_axis = 1 if norm_tracewise else None
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)

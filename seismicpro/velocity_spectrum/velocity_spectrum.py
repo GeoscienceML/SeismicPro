@@ -30,7 +30,6 @@ COHERENCY_FUNCS = {
     'CC': coherency_funcs.crosscorrelation,
     'ENCC': coherency_funcs.energy_normalized_crosscorrelation,
     'energy_normalized_crosscorrelation': coherency_funcs.energy_normalized_crosscorrelation,
-    
     "SS": coherency_funcs.stacked_amplituded_sum
 }
 
@@ -183,7 +182,7 @@ class BaseVelocitySpectrum(SamplesContainer):
         return out
 
     def _plot(self, title=None, x_label=None, x_ticklabels=None, x_ticker=None, y_ticklabels=None, y_ticker=None,
-              grid=False, stacking_velocity_ix=None, velocity_bounds_ix=None, colorbar=True,
+              grid=False, stacking_velocity_ixs=None, velocity_bounds_ixs=None, colorbar=True,
               clip_threshold_quantile=0.99, n_levels=10, ax=None, **kwargs):
         """Plot vertical velocity spectrum and, optionally, stacking velocity.
 
@@ -230,12 +229,14 @@ class BaseVelocitySpectrum(SamplesContainer):
         add_colorbar(ax, img, colorbar, y_ticker=y_ticker)
         ax.set_title(**{"label": None, **title})
 
-        if stacking_velocity_ix is not None:
-            stacking_times_ix, stacking_velocities_ix = stacking_velocity_ix
-            ax.plot(stacking_velocities_ix, stacking_times_ix, c='#fafcc2', linewidth=2.5,
-                    marker="o", markevery=slice(1, -1))
-        if velocity_bounds_ix is not None:
-            ax.fill_betweenx(*velocity_bounds_ix, color="white", alpha=0.2)
+        if stacking_velocity_ixs is not None:
+            for stacking_velocity_ix, c in zip(stacking_velocity_ixs, ['#fafcc2', 'green', 'black']):
+                stacking_times_ix, stacking_velocities_ix = stacking_velocity_ix
+                ax.plot(stacking_velocities_ix, stacking_times_ix, c=c, linewidth=2.5,
+                        marker="o", markevery=slice(1, -1))
+        if velocity_bounds_ixs is not None:
+            for velocity_bounds_ix in velocity_bounds_ixs:
+                ax.fill_betweenx(*velocity_bounds_ix, color="white", alpha=0.2)
         if grid:
             ax.grid(c='k')
 
@@ -455,30 +456,40 @@ class VerticalVelocitySpectrum(BaseVelocitySpectrum):
               colorbar=True, ax=None, **kwargs):
         """Plot vertical velocity spectrum."""
         # Add a stacking velocity line on the plot
-        stacking_velocity_ix = None
-        velocity_bounds_ix = None
+        stacking_velocity_ixs = None
+        velocity_bounds_ixs = None
         if stacking_velocity is not None:
-            stacking_times = self.get_time_knots(stacking_velocity)
-            stacking_velocities = stacking_velocity(stacking_times)
-            stacking_times_ix = self.times_to_indices(stacking_times)
-            stacking_velocities_ix = np.interp(stacking_velocities, self.velocities, np.arange(self.n_velocities))
-            stacking_velocity_ix = (stacking_times_ix, stacking_velocities_ix)
+            stacking_velocity_ixs = []
+            velocity_bounds_ixs = []
+            from ..utils import to_list
+            stacking_velocites = to_list(stacking_velocity)
+            for stacking_velocity in stacking_velocites:
+                #stacking_times = self.get_time_knots(stacking_velocity)
+                stacking_times = stacking_velocity.times
+                stacking_velocities = stacking_velocity(stacking_times)
+                stacking_times_ix = self.times_to_indices(stacking_times)
+                stacking_velocities_ix = np.interp(stacking_velocities, self.velocities, np.arange(self.n_velocities))
+                stacking_velocity_ix = (stacking_times_ix, stacking_velocities_ix)
+                stacking_velocity_ixs.append(stacking_velocity_ix)
 
-            if plot_bounds and stacking_velocity.bounds is not None:
-                left_bound, right_bound = stacking_velocity.bounds
-                left_times = self.get_time_knots(left_bound)
-                right_times = self.get_time_knots(right_bound)
-                bounds_times = np.unique(np.concatenate([left_times, right_times]))
-                left_velocities = left_bound(bounds_times)
-                right_velocities = right_bound(bounds_times)
-                bounds_times_ix = self.times_to_indices(bounds_times)
-                left_velocities_ix = np.interp(left_velocities, self.velocities, np.arange(self.n_velocities))
-                right_velocities_ix = np.interp(right_velocities, self.velocities, np.arange(self.n_velocities))
-                velocity_bounds_ix = (bounds_times_ix, left_velocities_ix, right_velocities_ix)
+                if plot_bounds and stacking_velocity.bounds is not None:
+                    left_bound, right_bound = stacking_velocity.bounds
+                    #left_times = self.get_time_knots(left_bound)
+                    #right_times = self.get_time_knots(right_bound)
+                    left_times = left_bound.times
+                    right_times = right_bound.times
+                    bounds_times = np.unique(np.concatenate([left_times, right_times]))
+                    left_velocities = left_bound(bounds_times)
+                    right_velocities = right_bound(bounds_times)
+                    bounds_times_ix = self.times_to_indices(bounds_times)
+                    left_velocities_ix = np.interp(left_velocities, self.velocities, np.arange(self.n_velocities))
+                    right_velocities_ix = np.interp(right_velocities, self.velocities, np.arange(self.n_velocities))
+                    velocity_bounds_ix = (bounds_times_ix, left_velocities_ix, right_velocities_ix)
+                    velocity_bounds_ixs.append(velocity_bounds_ix)
 
         super()._plot(title=title, x_label="Velocity, m/s", x_ticklabels=self.velocities,
                       x_ticker=x_ticker, y_ticklabels=self.times, y_ticker=y_ticker, ax=ax, grid=grid,
-                      stacking_velocity_ix=stacking_velocity_ix, velocity_bounds_ix=velocity_bounds_ix,
+                      stacking_velocity_ixs=stacking_velocity_ixs, velocity_bounds_ixs=velocity_bounds_ixs,
                       colorbar=colorbar, **kwargs)
         return self
 
@@ -538,7 +549,7 @@ class VerticalVelocitySpectrum(BaseVelocitySpectrum):
 
     @batch_method(target="for", args_to_unpack="init", copy_src=False)
     def calculate_stacking_velocity(self, init=None, bounds=None, relative_margin=None, acceleration_bounds="auto",
-                                    times_step=100, max_offset=5000, hodograph_correction_step=25, max_n_skips=2):
+                                    times_step=100, max_offset=5000, hodograph_correction_step=25, velocity_step=None, max_n_skips=2):
         """Calculate stacking velocity by vertical velocity spectrum.
 
         Notes
@@ -583,7 +594,7 @@ class VerticalVelocitySpectrum(BaseVelocitySpectrum):
         kwargs = {"init": get_first_defined(init, self.stacking_velocity), "bounds": bounds,
                   "relative_margin": get_first_defined(relative_margin, self.relative_margin),
                   "acceleration_bounds": acceleration_bounds, "times_step": times_step, "max_offset": max_offset,
-                  "hodograph_correction_step": hodograph_correction_step, "max_n_skips": max_n_skips}
+                  "hodograph_correction_step": hodograph_correction_step, "velocity_step": velocity_step, "max_n_skips": max_n_skips}
         return StackingVelocity.from_vertical_velocity_spectrum(self, **kwargs)
 
 
@@ -937,7 +948,7 @@ class DispersionSpectrumPlot(VelocitySpectrumPlot):
 
         gather.bandpass_filter(low=self.click_time - 1, high=self.click_time + 1, filter_size=81 * 2)
         gather.data = apply_lmo(gather.data, gather.times, gather.offsets, self.click_vel, gather.sample_interval, gather.delay, fill_value=0)
-        gather.plot(ax=ax, q_vmin=0.2, q_vmax=0.8) # gather_plot_kwargs
+        gather.plot(ax=ax, q_vmin=0.01, q_vmax=0.99) # gather_plot_kwargs
 
 
 
@@ -980,6 +991,11 @@ class EmptySpectrum(VerticalVelocitySpectrum):
         self.velocity_spectrum = np.where(spectrum_max != 0, self.velocity_spectrum / spectrum_max, 0)
         return self
 
+    def smooth(self, window_size=5):
+        import cv2
+        self.velocity_spectrum = cv2.filter2D(self.velocity_spectrum, ddepth=-1, kernel=np.ones((window_size, window_size))) / window_size ** 2
+        return self
+
 
 from numba import njit, prange
 @njit(nogil=True, parallel=True)
@@ -1005,16 +1021,14 @@ def ps(velocities, frequencies, offsets, fft):
 @njit(nogil=True, parallel=True)
 def new_ps(velocities, frequencies, offsets, fft):
     power = np.empty((len(velocities), len(frequencies)), dtype=np.float64)
-
     fft = np.where(np.abs(fft), fft / np.abs(fft), 0)
 
-    dx = offsets[1:] - offsets[:-1]
     for row in prange(len(velocities)):
         velocity = velocities[row]
         delta = offsets / velocity
         for col in range(len(frequencies)):
             frequency = frequencies[col]
-            shift = np.exp(1j * 2*np.pi * frequency * delta)
+            shift = np.exp(1j * 2* np.pi * frequency * delta)
             inner = shift * fft[:, col]
             power[row, col] = np.abs(np.sum(inner))
     return power
@@ -1048,22 +1062,26 @@ from tqdm import tqdm
 from .utils.bessel import j0, y0
 
 @njit(parallel=True)
-def fdbf(fft, velocities, frequencies, offsets, cylindrical=False, weighted=False, p=0):
+def fdbf(fft, velocities, frequencies, offsets, cylindrical=False, weighted=False, p=0, limit_offsets=None):
     power = np.empty((len(frequencies), len(velocities)), dtype=np.complex128)
     k = 2 * np.pi * frequencies.reshape(-1, 1) / velocities.reshape(1, -1)
     NF = len(frequencies)
-    
+    NV = len(velocities)
+
     if weighted:
         a, b = np.histogram(offsets, bins=100)
         ix = np.searchsorted(b, offsets)
         ix[ix == 0] = 1
         ix = ix  - 1
+        a[a == 0] = 1
         w = (1 / a[ix]).astype(np.float32)
+
     else:
         w = (offsets ** p).astype(np.float32)
     
     for i in prange(NF):
-        for j in range(len(velocities)):
+        mask = offsets < limit_offsets[i]
+        for j in range(NV):
             kx = k[i, j] * offsets
             if cylindrical:
                 h0_kx = j0(kx) + 1j * y0(kx)
@@ -1072,9 +1090,9 @@ def fdbf(fft, velocities, frequencies, offsets, cylindrical=False, weighted=Fals
             else:
                 steer = np.exp(-1j * kx).reshape(1, -1)
 
-            steer = w * steer
+            steer = (w * steer)[:, mask]
         
-            HS = np.conjugate(steer) @ fft[:, i]
+            HS = np.conjugate(steer) @ fft[:, i][mask]
             power[i, j] = (HS * np.conjugate(HS)).item()
 
     return power
@@ -1083,7 +1101,7 @@ class BeamFormer(EmptySpectrum):
 
     title = 'BeamFormer'
 
-    def __init__(self, gather, velocities, fmax=None, weighted=False, cylindrical=True, p=0):
+    def __init__(self, gather, velocities, fmax=None, weighted=False, cylindrical=True, p=0, limit_offsets=None):
         frequencies = np.fft.fftfreq(gather.n_samples, gather.sample_interval / 1000)
         fft = np.fft.fft(gather.data)
     
@@ -1094,7 +1112,13 @@ class BeamFormer(EmptySpectrum):
 
         #w = 1 / gather.offsets.reshape(-1, 1) ** 0.5
         #fft = fft * w
-        power = fdbf(fft, velocities, frequencies, gather.offsets.astype(np.float32), cylindrical, weighted, p)
+
+        if limit_offsets is not None:
+            limit_offsets = limit_offsets(frequencies)
+        else:
+            limit_offsets = np.array([gather.offsets.max() + 1] * len(frequencies))
+    
+        power = fdbf(fft, velocities, frequencies, gather.offsets.astype(np.float32), cylindrical, weighted, p, limit_offsets)
         power = np.abs(power)
     
         # power_max = np.nansum(power ** 2, axis=1, keepdims=True) ** 0.5
@@ -1126,4 +1150,69 @@ def stacked_amplitude_sum(corrected_gather):
     for i in prange(corrected_gather.shape[1]):
         numerator[i] = np.nansum(corrected_gather[:, i])
     return numerator, denominator
+
+from ..stacking_velocity import StackingVelocityField
+
+
+class DispersionField(StackingVelocityField):
+
+    @classmethod
+    def from_file(cls, path, coords_cols=("CDP_X", "CDP_Y"), encoding="UTF-8", survey=None,
+                  auto_create_interpolator=True):
+        import io
+        import pandas as pd
+        from tqdm import tqdm
+        from glob import glob
+        from ..utils import Coordinates
+        
+        vfunc_data = []
+        items = []
+        for file in tqdm(glob(path + '/*')):
+            with open(file, 'r') as f:
+                data = f.readlines()
+            x, y = data[-1].split()[:2]
+            x, y = float(x), float(y)
+
+            buffer = io.StringIO(''.join(data[:-1]))
+            data_x, data_y = pd.read_csv(buffer, sep='\s+', names=['f', 'v', 'w', 'N'], usecols=[0, 1]).values.T      
+            coords = Coordinates((x, y), names=coords_cols)
+            #vfunc_data.append((coords, data_x, data_y))
+            item  = cls.item_class(data_x, data_y, coords=coords)
+            item.file = file
+            items.append(item)
+    
+        return cls(items, survey=survey, auto_create_interpolator=auto_create_interpolator)
+
+
+class VSField(StackingVelocityField):
+
+    @classmethod
+    def from_survey(cls, survey, coords_cols=("CDP_X", "CDP_Y"), encoding="UTF-8", auto_create_interpolator=True):
+        from tqdm import tqdm
+        from ..utils import Coordinates
+        
+        vfunc_data = []
+        for ix in tqdm(survey.indices):
+            gather = survey.get_gather(ix)
+            data_x = gather.times
+            data_y = gather.data[0]
+            coords = Coordinates(gather[coords_cols][0], names=coords_cols)
+            vfunc_data.append((coords, data_x, data_y))
+
+        items = [cls.item_class(data_x, data_y, coords=coords) for coords, data_x, data_y in vfunc_data]
+        return cls(items, survey=survey, auto_create_interpolator=auto_create_interpolator)
+
+    @classmethod
+    def from_survey(cls, survey, coords_cols=("CDP_X", "CDP_Y"), encoding="UTF-8", auto_create_interpolator=True):
+        from tqdm import tqdm
+        from ..utils import Coordinates
+        
+        vfunc_data = []
+        gather = survey.load_gather(survey.headers)
+        gather = gather[:, 1:]
+
+        items = [cls.item_class(gather.times, data_y, coords=Coordinates(coords, names=coords_cols)) 
+                                         for coords, data_y in zip(gather[coords_cols], gather.data)]
+        return cls(items, survey=survey, auto_create_interpolator=auto_create_interpolator)
+
 
