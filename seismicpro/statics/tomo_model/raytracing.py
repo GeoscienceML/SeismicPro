@@ -80,6 +80,9 @@ def raytrace(src, src_slowness, dst_list, tt_grid, z_grad, x_grad, y_grad, z, x,
                 gy = -interp3d(z, x, y, y_grad, cur)
 
             gn = (gz**2 + gx**2 + gy**2)**0.5
+            if gn < TOL:
+                straight = True
+                continue
             gz /= gn
             gx /= gn
             gy /= gn
