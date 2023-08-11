@@ -41,21 +41,20 @@ def apply_agc(data, window_size=125, use_rms_mode=True):
     # AGC coefficients before start and after end are extrapolated.
     start, end = win_left, trace_len - win_right
 
-    data_res = np.empty_like(data)
     coefs = np.empty_like(data)
     for i in prange(n_traces):  # pylint: disable=not-an-iterable
-        # Calculate AGC coef for the first window
         win_sum = np.float64(0)
         win_count = 0
+        # Calculate AGC coef for the first window
         for j in range(window_size):
             amp, non_zero = process_amp(data[i, j], use_rms_mode)
             win_count += non_zero
             win_sum += amp
+
         coef = win_count / (win_sum + 1e-15)
         if use_rms_mode:
             coef = np.sqrt(coef)
         # Extrapolate first AGC coef for trace indices before start
-        data_res[i, : start + 1] = coef * data[i, : start + 1]
         coefs[i, : start + 1] = coef
 
         # Move the window by one trace element and recalculate the AGC coef
@@ -71,13 +70,12 @@ def apply_agc(data, window_size=125, use_rms_mode=True):
             coef = win_count / (win_sum + 1e-15)
             if use_rms_mode:
                 coef = np.sqrt(coef)
-            data_res[i, j] = coef * data[i, j]
             coefs[i, j] = coef
         # Extrapolate last AGC coef for trace indices after end
-        data_res[i, end:] = coef * data[i, end:]
         coefs[i, end:] = coef
+        data[i] *= coefs[i]
 
-    return data_res, coefs
+    return data, coefs
 
 
 @njit(parallel=True, nogil=True)
@@ -96,10 +94,9 @@ def undo_agc(data, coefs):
     data : 2d array
         Gather data without AGC.
     """
-    new_data = np.empty_like(data)
     for i in prange(data.shape[0]):  # pylint: disable=not-an-iterable
-        new_data[i] = data[i] / coefs[i]
-    return new_data
+        data[i] /= coefs[i]
+    return data
 
 
 @njit(nogil=True, parallel=True)

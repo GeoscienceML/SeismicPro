@@ -567,10 +567,12 @@ class SeismicBatch(Batch):
             The batch with scaled gathers and optionally AGC coefficients.
         """
         src_list, dst_list = align_src_dst(src, dst)
-        dst_coefs_list = to_list(dst_coefs)
+        dst_coefs_list = to_list(dst_coefs) if dst_coefs is not None else [None] * len(dst_list)
+        if len(dst_coefs_list) != len(dst_list):
+            raise ValueError("dst_coefs and dst should have the same length.")
 
         # pylint: disable-next=redefined-argument-from-local
-        for src, dst_coef, dst in zip_longest(src_list, dst_coefs_list, dst_list):
+        for src, dst_coef, dst in zip(src_list, dst_coefs_list, dst_list):
             src_obj = getattr(self, src)[pos]
             src_obj = src_obj.copy() if src != dst else src_obj
             return_coefs = dst_coef is not None

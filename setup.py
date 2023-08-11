@@ -44,7 +44,7 @@ setup(
         'multiprocess>=0.70.11',
         'requests>=2.24',
         'psutil>=5.7.2',
-        'batchflow>=0.8.5',
+        'batchflow>=0.8.7',
         'tbb>=2021.7.1',
     ],
     classifiers=[
