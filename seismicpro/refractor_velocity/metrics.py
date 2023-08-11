@@ -357,6 +357,7 @@ class FirstBreaksPhases(RefractorVelocityMetric):
         _ = gather
         return super().binarize(gather, np.abs(metric_values), threshold)
 
+
 class FirstBreaksCorrelations(RefractorVelocityMetric):
     """Mean Pearson correlation coefficient of trace with mean hodograph in window around the first break.
 
@@ -472,6 +473,7 @@ class FirstBreaksCorrelations(RefractorVelocityMetric):
                                        delay=fb_time_mean - self.window_size // 2)
         mean_hodograph_gather.plot(mode="wiggle", ax=ax, **kwargs)
         set_ticks(ax, axis="x", label="Amplitude", num=3)
+
 
 class DivergencePoint(RefractorVelocityMetric):
     """The divergence point metric for first breaks.

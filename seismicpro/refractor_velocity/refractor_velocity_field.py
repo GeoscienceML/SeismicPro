@@ -642,10 +642,12 @@ class RefractorVelocityField(SpatialField):
 
         By default, the following metrics are calculated:
         * The first break outliers metric. A first break time is considered to be an outlier if it differs from the
-        expected arrival time defined by an offset-traveltime curve by more than a given threshold.
+          expected arrival time defined by an offset-traveltime curve by more than a given threshold.
         * Mean amplitude of the signal in the moment of first break.
         * Mean absolute deviation of the signal phase from target value in the moment of first break.
         * Mean Pearson correlation coefficient of trace with mean hodograph in window around the first break.
+        * An offset after which first breaks start diverging from the expected arrival time defined by the near-surface
+          velocity model.
 
         Parameters
         ----------
