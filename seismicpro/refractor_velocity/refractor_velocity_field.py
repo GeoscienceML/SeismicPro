@@ -4,17 +4,19 @@ location and allows for their spatial interpolation"""
 import os
 from textwrap import dedent
 from functools import partial, cached_property
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
 from .refractor_velocity import RefractorVelocity
+from .metrics import REFRACTOR_VELOCITY_QC_METRICS, RefractorVelocityMetric
 from .interactive_plot import FieldPlot
 from .utils import get_param_names, postprocess_params, dump_refractor_velocities, load_refractor_velocities
 from ..field import SpatialField
-from ..utils import to_list, get_coords_cols, Coordinates, IDWInterpolator, ForPoolExecutor
+from ..metrics import initialize_metrics
+from ..utils import to_list, get_coords_cols, Coordinates, IDWInterpolator, ForPoolExecutor, GEOGRAPHIC_COORDS
 from ..const import HDR_FIRST_BREAK
 
 
@@ -632,3 +634,96 @@ class RefractorVelocityField(SpatialField):
             Additional keyword arguments to be passed to `MetricMap.plot`.
         """
         FieldPlot(self, **kwargs).plot()
+
+    #pylint: disable-next=invalid-name
+    def qc(self, metrics=None, survey=None, first_breaks_header=HDR_FIRST_BREAK, correct_uphole=None,
+           n_workers=None, bar=True, chunk_size=250):
+        """Perform quality control of the first breaks given the near-surface velocity model.
+
+        By default, the following metrics are calculated:
+        * The first break outliers metric. A first break time is considered to be an outlier if it differs from the
+          expected arrival time defined by an offset-traveltime curve by more than a given threshold.
+        * Mean amplitude of the signal in the moment of first break.
+        * Mean absolute deviation of the signal phase from target value in the moment of first break.
+        * Mean Pearson correlation coefficient of trace with mean hodograph in window around the first break.
+        * An offset after which first breaks start diverging from the expected arrival time defined by the near-surface
+          velocity model.
+
+        Parameters
+        ----------
+        metrics : instance or subclass of :class:`~metrics.RefractorVelocityMetric` or list of them, optional
+            Metrics to calculate. Defaults to those defined in `~metrics.REFRACTOR_VELOCITY_QC_METRICS`.
+        survey : Survey, optional
+            Survey to load traces from. Defaults to a survey the field is linked to.
+        first_breaks_header : str, optional, defaults to :const:`~const.HDR_FIRST_BREAK`
+            Column name from `survey.headers` where times of first break are stored.
+        correct_uphole : bool, optional
+            Whether to perform uphole correction by adding values of "SourceUpholeTime" header to times of first breaks
+            emulating the case when sources are located on the surface. If not given, correction is performed if
+            "SourceUpholeTime" header is loaded and `self` if uphole-corrected.
+        n_workers : int, optional
+            The number of threads to be spawned to calculate metrics. Defaults to the number of cpu cores.
+        bar : bool, optional, defaults to True
+            Whether to show a progress bar.
+        chunk_size : int, optional, defaults to 250
+            The number of gathers to calculate metrics for in each of spawned threads.
+
+        Returns
+        -------
+        metrics_maps : MetricMap or list of MetricMap
+            Calculated metrics maps. Has the same length as `metrics`.
+        """
+        if survey is None:
+            if not self.has_survey:
+                raise ValueError("`survey` must be passed if the field is not linked with a survey.")
+            survey = self.survey
+
+        metrics = REFRACTOR_VELOCITY_QC_METRICS if metrics is None else metrics
+        metrics_instances, is_single_metric = initialize_metrics(metrics, metric_class=RefractorVelocityMetric)
+        if correct_uphole is None:
+            correct_uphole = "SourceUpholeTime" in survey.available_headers and self.is_uphole_corrected
+        for metric in metrics_instances:
+            metric.set_defaults(first_breaks_header=first_breaks_header, correct_uphole=correct_uphole)
+
+        coords_cols = get_coords_cols(survey.indexed_by)
+        is_geographic = coords_cols in GEOGRAPHIC_COORDS
+
+        gather_change_ix = np.where(~survey.headers.index.duplicated(keep="first"))[0]
+        gather_coords = survey[coords_cols][gather_change_ix]
+
+        n_chunks, mod = divmod(survey.n_gathers, chunk_size)
+        if mod:
+            n_chunks += 1
+        if n_workers is None:
+            n_workers = os.cpu_count()
+        n_workers = min(n_chunks, n_workers)
+
+        def calc_metrics(gather_indices_chunk, coords_chunk):
+            """Calculate metrics for a given chunk of gather indices."""
+            refractor_velocities = self(coords_chunk, is_geographic=is_geographic)
+            results = []
+            for idx, rv in zip(gather_indices_chunk, refractor_velocities):
+                gather = survey.get_gather(idx)
+                gather_results = [metric(gather, refractor_velocity=rv) for metric in metrics_instances]
+                results.append(gather_results)
+            return results
+
+        executor_class = ForPoolExecutor if n_workers == 1 else ThreadPoolExecutor
+        futures = []
+        with tqdm(total=survey.n_gathers, desc="Gathers processed", disable=not bar) as pbar:
+            with executor_class(max_workers=n_workers) as pool:
+                for i in range(n_chunks):
+                    gathers_indices_chunk = survey.indices[i * chunk_size : (i + 1) * chunk_size]
+                    coords_chunk = gather_coords[i * chunk_size : (i + 1) * chunk_size]
+                    future = pool.submit(calc_metrics, gathers_indices_chunk, coords_chunk)
+                    future.add_done_callback(lambda fut: pbar.update(len(fut.result())))
+                    futures.append(future)
+        results = sum([future.result() for future in futures], [])
+
+        metrics_maps = []
+        metrics_instances = [metric.provide_context(survey=survey, field=self) for metric in metrics_instances]
+        metrics_maps = [metric.construct_map(gather_coords, metric_values, index=survey.indices)
+                        for metric, metric_values in zip(metrics_instances, zip(*results))]
+        if is_single_metric:
+            return metrics_maps[0]
+        return metrics_maps

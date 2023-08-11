@@ -2,4 +2,4 @@
 
 from .gather import Gather
 from .cropped_gather import CroppedGather
-from .metrics import FirstBreaksOutliers, SignalLeakage
+from .metrics import SignalLeakage

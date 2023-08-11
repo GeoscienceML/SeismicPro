@@ -5,7 +5,7 @@ from .dataset import SeismicDataset
 from .index import SeismicIndex
 from .batch import SeismicBatch
 from .survey import Survey
-from .gather import Gather, CroppedGather, FirstBreaksOutliers, SignalLeakage
+from .gather import Gather, CroppedGather, SignalLeakage
 from .velocity_spectrum import VerticalVelocitySpectrum, ResidualVelocitySpectrum
 from .muter import Muter, MuterField
 from .stacking_velocity import StackingVelocity, StackingVelocityField
